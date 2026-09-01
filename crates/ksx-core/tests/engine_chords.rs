@@ -408,6 +408,7 @@ fn swapping_tables_mid_chord_neutralizes_the_pad() {
     let deltas = engine.swap_tables(EngineTables::build(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(dev.clone()), None, edited.name.clone()).expect("slot"),
         preset: edited,
+        additional_presets: Vec::new(),
     }]));
     assert_eq!(
         deltas.len(),
@@ -447,10 +448,12 @@ fn consumption_is_per_slot() {
         ResolvedSlot {
             spec: SlotSpec::new(1, Some(dev.clone()), None, "P1".to_owned()).expect("slot"),
             preset: chorded,
+            additional_presets: Vec::new(),
         },
         ResolvedSlot {
             spec: SlotSpec::new(2, Some(dev.clone()), None, "P2".to_owned()).expect("slot"),
             preset: plain,
+            additional_presets: Vec::new(),
         },
     ]);
 

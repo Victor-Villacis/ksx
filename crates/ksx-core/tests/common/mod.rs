@@ -110,6 +110,7 @@ pub fn engine_for(preset: Preset) -> Engine {
     Engine::new(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(dev), None, preset.name.clone()).expect("valid slot"),
         preset,
+        additional_presets: Vec::new(),
     }])
 }
 
@@ -123,6 +124,7 @@ pub fn engine_with_socd(preset: Preset, socd: ksx_core::Socd) -> Engine {
             .expect("valid slot")
             .with_socd(socd),
         preset,
+        additional_presets: Vec::new(),
     }])
 }
 
@@ -220,6 +222,7 @@ pub fn ipac_engine() -> Engine {
             spec: SlotSpec::new((i + 1) as u8, Some(dev.clone()), None, preset.name.clone())
                 .expect("valid slot number"),
             preset,
+            additional_presets: Vec::new(),
         })
         .collect();
     Engine::new(slots)
@@ -349,6 +352,7 @@ pub fn full_house_slots(presets: Vec<Preset>) -> Vec<ResolvedSlot> {
             spec: SlotSpec::new((i + 1) as u8, Some(dev.clone()), None, preset.name.clone())
                 .expect("valid slot number"),
             preset,
+            additional_presets: Vec::new(),
         })
         .collect()
 }

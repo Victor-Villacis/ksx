@@ -89,6 +89,7 @@ fn test_engine() -> Engine {
     let slot = |n: u8, dev: &DeviceId, p: Preset| ResolvedSlot {
         spec: SlotSpec::new(n, Some(dev.clone()), None, p.name.clone()).unwrap(),
         preset: p,
+        additional_presets: Vec::new(),
     };
     Engine::new(vec![
         slot(1, &a, Preset::builtin_default()),
@@ -228,6 +229,7 @@ proptest! {
             .map(|(i, e)| ResolvedSlot {
                 spec: SlotSpec::new((i + 1) as u8, Some(dev.clone()), None, "p").unwrap(),
                 preset: preset(&format!("p{}", i + 1), e.clone()),
+                additional_presets: Vec::new(),
             })
             .collect();
         let expected: HashSet<u8> = entries
@@ -271,6 +273,7 @@ proptest! {
         let mut engine = Engine::new(vec![ResolvedSlot {
             spec: SlotSpec::new(1, Some(dev.clone()), None, "socd").unwrap(),
             preset: p,
+            additional_presets: Vec::new(),
         }]);
 
         let (mut a_down, mut d_down) = (false, false);

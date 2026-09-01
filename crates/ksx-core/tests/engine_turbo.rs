@@ -29,6 +29,7 @@ fn engine_for(p: ksx_core::Preset) -> Engine {
     Engine::new(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(dev), None, p.name.clone()).expect("valid slot"),
         preset: p,
+        additional_presets: Vec::new(),
     }])
 }
 
@@ -327,6 +328,7 @@ fn a_hot_swap_releases_a_turbo_caught_mid_press() {
     let deltas = e.swap_tables(EngineTables::build(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(dev), None, replacement.name.clone()).expect("valid slot"),
         preset: replacement,
+        additional_presets: Vec::new(),
     }]));
     assert_eq!(deltas.len(), 1);
     assert_eq!(state(&e), PadState::default());
@@ -398,10 +400,12 @@ fn turbo_in_one_slot_does_not_disturb_another() {
         ResolvedSlot {
             spec: SlotSpec::new(1, Some(dev.clone()), None, plain.name.clone()).expect("slot 1"),
             preset: plain,
+            additional_presets: Vec::new(),
         },
         ResolvedSlot {
             spec: SlotSpec::new(2, Some(dev), None, fast.name.clone()).expect("slot 2"),
             preset: fast,
+            additional_presets: Vec::new(),
         },
     ]);
 

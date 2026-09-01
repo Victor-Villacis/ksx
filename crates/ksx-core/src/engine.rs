@@ -15,14 +15,65 @@ use crate::device::{DeviceId, KeyEvent};
 use crate::key::Key;
 use crate::macros::{Interrupt, OnRelease, Repeat, Retrigger};
 use crate::pad::{Axis, PadState, Trigger, XButtons, AXIS_CENTER};
-use crate::preset::{Binding, Chord, Preset};
-use crate::slot::{SlotSpec, MAX_SLOTS};
+use crate::preset::{Binding, Preset};
+use crate::slot::{SlotSpec, SourceSpec, MAX_SLOTS};
 
 /// A slot with its preset already resolved by the config layer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedSlot {
     pub spec: SlotSpec,
+    /// Resolved form of [`SlotSpec::primary_preset`]. Kept as the named field
+    /// existing callers already understand; additional source preset names are
+    /// resolved in [`ResolvedSlot::additional_presets`].
     pub preset: Preset,
+    /// Resolved presets referenced by non-primary sources. A second source may
+    /// reference the primary preset and therefore needs no duplicate here.
+    pub additional_presets: Vec<Preset>,
+}
+
+impl ResolvedSlot {
+    /// A resolved legacy/single-preset slot.
+    #[must_use]
+    pub fn new(spec: SlotSpec, preset: Preset) -> Self {
+        Self {
+            spec,
+            preset,
+            additional_presets: Vec::new(),
+        }
+    }
+
+    /// Supplies the other unique presets referenced by this slot's sources.
+    #[must_use]
+    pub fn with_additional_presets(mut self, presets: Vec<Preset>) -> Self {
+        self.additional_presets = presets;
+        self
+    }
+
+    /// The resolved mapping for one of this slot's physical sources.
+    #[must_use]
+    pub fn preset_for(&self, source: &SourceSpec) -> Option<&Preset> {
+        // The first source is the compatibility/primary source by position.
+        // Older core callers constructed a `ResolvedSlot` whose resolved
+        // preset name did not necessarily repeat `SlotSpec`'s reference; that
+        // was harmless before per-source resolution and remains so here.
+        if self.spec.sources.first().is_some_and(|primary| {
+            primary == source || primary.preset.eq_ignore_ascii_case(&source.preset)
+        }) || source.preset.eq_ignore_ascii_case(&self.preset.name)
+        {
+            return Some(&self.preset);
+        }
+        self.additional_presets
+            .iter()
+            .find(|preset| preset.name.eq_ignore_ascii_case(&source.preset))
+    }
+}
+
+/// A source-qualified physical input address. Two keyboards may emit the same
+/// [`Key`], but those are two independent holders and must never share state.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct InputAddress {
+    device: usize,
+    key: Key,
 }
 
 /// A genuine pad-state transition for one slot. `slot` is the slot *number*
@@ -73,6 +124,9 @@ type SyncSlots = SmallVec<[u8; MAX_SLOTS as usize]>;
 /// against the device's key bitset — no key lookup, no allocation, no scan of
 /// the preset.
 struct ChordRt {
+    /// Device/source this guard belongs to. All constituent dense ids carry
+    /// the same owner; keeping it here also scopes holder rewiring and exits.
+    source: usize,
     binding: Binding,
     /// Dense id of the trigger key.
     trigger: u32,
@@ -96,6 +150,8 @@ struct ChordRt {
 /// the chord machinery, unchanged, so a macro can never strand a button that a
 /// chord could not.
 struct MacroRt {
+    /// Device/source whose controls trigger and interrupt this macro.
+    source: usize,
     /// **Absolute** end-of-step offsets from the macro's start, in ms, with the
     /// sampling floor already applied ([`crate::Macro::deadlines`]).
     ///
@@ -109,6 +165,10 @@ struct MacroRt {
     /// turns "the timeline already passed" into "publish it anyway, briefly"
     /// rather than into a skipped — invisible — input.
     min_visible: SmallVec<[u32; 8]>,
+    /// Output holds for each step. Retained at runtime-table build time because
+    /// a slot can now compile steps from several independently resolved
+    /// presets rather than indexing one `ResolvedSlot::preset` in pass two.
+    holds: Vec<SmallVec<[Binding; 4]>>,
     /// Holder id of step 0; step `i` is `first_holder + i`.
     first_holder: u32,
     on_release: OnRelease,
@@ -254,6 +314,9 @@ struct TurboRt {
     /// build time, which is what stops a source from pinning the button down
     /// through the released half of the cycle.
     binding: Binding,
+    /// Authored rate retained so independently resolved source presets cannot
+    /// silently choose between conflicting destination policies.
+    hz: u32,
     /// Milliseconds pressed, then released, per cycle. Resolved ONCE, off the
     /// hot path, so the scheduler only ever adds a number.
     on_ms: u32,
@@ -299,18 +362,23 @@ struct ToggleRt {
     /// the same reason macros read `edge` (see `handle_at`).
     source_was: bool,
     latched: bool,
+    /// Physical source whose rising edge most recently latched this endpoint
+    /// on. Device-yank cleanup can therefore release only state attributed to
+    /// the removed source without disturbing another keyboard's latch.
+    latched_by: Option<usize>,
 }
 
-/// One opposing control under an ORDER-AWARE SOCD policy
-/// (docs/INPUT-TRANSFORMS.md §2.6: last-input / first-input).
+/// One opposing destination control under a slot's SOCD policy.
 ///
-/// The static policies (neutral, up-priority) are generated chords and never
-/// build one of these. This is the order memory a chord cannot express: which
-/// side rose more recently. Its whole OUTPUT is bits in the same `consumed`
-/// mask chord consumption writes, so suppression, resumption, all-keys-up and
-/// the one-batch release discipline are the existing machinery untouched.
+/// Static SOCD chords remain useful inside one preset, but they cannot span
+/// physical sources. This runtime entry groups source-qualified holders by
+/// destination, so every policy also arbitrates keyboard A against keyboard B.
+/// Its whole output is bits in the same `consumed` mask chord consumption
+/// writes, preserving suppression, resumption and the one-batch release rule.
 #[derive(Clone, Debug)]
 struct SocdRt {
+    /// Vertical pairs are the only ones `up-priority` treats differently.
+    vertical: bool,
     /// Dense key ids driving the NEGATIVE half (left/down) — keys driving
     /// only that half; a self-opposing key belongs to neither side.
     neg: SmallVec<[u32; 2]>,
@@ -327,13 +395,9 @@ struct SocdRt {
 
 struct SlotRuntime {
     number: u8,
-    /// Index into `Engine::devices`.
-    keyboard: Option<u8>,
-    mouse: Option<u8>,
-    /// The device whose key state chord guards are evaluated against
-    /// (`keyboard`, else `mouse`). Events from the slot's *other* device only
-    /// update that key's own heldness — a chord never spans two devices.
-    chord_device: Option<u8>,
+    /// Indices into `Engine::devices` for every independently mapped source.
+    /// Used by device-yank cleanup even when no key is currently held.
+    sources: SmallVec<[usize; 2]>,
     /// DIGITAL endpoint -> ids of every HOLDER driving it (all-keys-up rule).
     /// Ids below `chord_base` are dense keys; ids at or above it are chords.
     ///
@@ -374,6 +438,10 @@ struct SlotRuntime {
     chord_base: u32,
     /// Holder id -> the bindings it drives in THIS slot, in preset order.
     holder_bindings: Vec<SmallVec<[Binding; 2]>>,
+    /// Holder id -> source device owner. Dense physical holders, guarded
+    /// chords, macro steps, turbos and toggles all stay in one source-qualified
+    /// identity space.
+    holder_sources: Vec<usize>,
     /// Every holder that drives something — the full-resync scan list.
     all_holders: Vec<u32>,
     /// Dense ids consumed by some chord (trigger + `when`), deduped.
@@ -422,13 +490,13 @@ struct SlotRuntime {
     /// macro steps < turbo < toggle, written down once in [`Self::holder_now`].
     toggle_base: u32,
 
-    // ---- order-aware SOCD runtime ------------------------------------------
-    /// One entry per opposing control; EMPTY unless the slot's policy is
-    /// last-input or first-input (the static policies are chords).
+    // ---- slot-wide SOCD runtime --------------------------------------------
+    /// One entry per opposing destination control. Static generated chords
+    /// handle same-source pairs first; this layer supplies the slot-wide
+    /// arbitration they cannot express across physical sources.
     socd: Vec<SocdRt>,
-    /// `true` = last-input (the riser wins), `false` = first-input (the
-    /// incumbent wins). Meaningless while `socd` is empty.
-    socd_last: bool,
+    /// Destination-slot policy shared by every source feeding this runtime.
+    socd_policy: crate::Socd,
     /// Every key in any side, deduped — joins the scan like `chord_keys`, so
     /// a suppression change is applied in the same batch as its cause.
     socd_keys: SmallVec<[u32; 8]>,
@@ -447,6 +515,20 @@ const fn axis_slot(axis: Axis) -> usize {
         Axis::Y => 1,
         Axis::Rx => 2,
         Axis::Ry => 3,
+    }
+}
+
+/// Dense `0..6` index for one directional destination control. This mirrors
+/// the canonical order in `socd.rs`, but operates on source-qualified holders
+/// so opposite sides may come from different physical devices.
+const fn socd_control_slot(pointing: crate::Pointing) -> usize {
+    match (pointing.mechanism, pointing.vertical) {
+        (crate::DirMechanism::Dpad, false) => 0,
+        (crate::DirMechanism::Dpad, true) => 1,
+        (crate::DirMechanism::LeftStick, false) => 2,
+        (crate::DirMechanism::LeftStick, true) => 3,
+        (crate::DirMechanism::RightStick, false) => 4,
+        (crate::DirMechanism::RightStick, true) => 5,
     }
 }
 
@@ -495,8 +577,8 @@ impl SlotRuntime {
         bit(&self.held, id)
     }
 
-    /// A holder's demand FELL. `down` is the event device's key bitset,
-    /// already updated for the triggering release.
+    /// A holder's demand FELL. `down` is the global source-qualified holder
+    /// bitset, already updated for the triggering release.
     fn release(&mut self, binding: Binding, down: &[u64]) {
         let Some(control) = PadControl::of(binding) else {
             return;
@@ -518,13 +600,8 @@ impl SlotRuntime {
     /// edges is what makes that unrepresentable rather than merely fixed.
     ///
     /// `rising` is the demand of the holder whose edge caused this call, and
-    /// `None` on release. It is SEEDED rather than looked up because on the
-    /// non-stateful path `down` is the event *device's* bitset only (see
-    /// [`Engine::handle_at`]) while holder ids are global, so a slot bound to
-    /// both a keyboard and a mouse cannot always see its own press through
-    /// [`Self::holds`]. That asymmetry predates this function — `holds` has
-    /// always had it on the release path — and is deliberately not widened
-    /// here.
+    /// `None` on release. Seeding it preserves the precise edge/recency rule;
+    /// every other demand is read from the global source-qualified holder set.
     fn resolve(&mut self, control: PadControl, rising: Option<i16>, down: &[u64]) {
         if let PadControl::Axis(axis) = control {
             // The largest magnitude per SIGN, carried as the extreme VALUE so a
@@ -643,7 +720,7 @@ impl SlotRuntime {
         // SOURCE (§3a's toggle-turbo), so it must have its final answer before
         // `sync_turbo` asks. Whatever flips is `mark`ed and joins the same
         // delta batch as the key press that caused it.
-        self.sync_toggle(down);
+        self.sync_toggle(down, event_key);
         // After consumption, before the scan is built: a turbo endpoint's
         // sources are dense keys and chords, and both have their final answer
         // by now. Whatever this starts or stops is `mark`ed and therefore joins
@@ -680,16 +757,9 @@ impl SlotRuntime {
         self.apply_scan(down);
     }
 
-    /// Order-aware SOCD (docs/INPUT-TRANSFORMS.md §2.6): when both sides of a
-    /// control are held, suppress the losing side's keys by writing the same
-    /// `consumed` bits a chord would — one suppression mechanism, two writers.
-    ///
-    /// WHO WINS is the only difference between the two modes, and it is one
-    /// bit of memory per control: last-input hands the control to whichever
-    /// side rose most recently; first-input leaves it with the side that was
-    /// already driving. Releasing the winner hands the control to the other
-    /// side in the same batch (its keys stop being suppressed and resume in
-    /// `apply_scan`) — the resume-on-release rule chords already follow.
+    /// Slot-wide SOCD (docs/INPUT-TRANSFORMS.md §2.6): when both sides of a
+    /// destination control are held, suppress the policy's losing holders by
+    /// writing the same `consumed` bits a chord would.
     ///
     /// A side is DRIVING while any of its keys is down and not consumed by a
     /// chord: a hand-written chord over the pair outranks the policy at
@@ -713,24 +783,43 @@ impl SlotRuntime {
                 .any(|&k| bit(down, k) && !bit(&self.consumed, k));
             let p = &mut self.socd[i];
             if neg_now && pos_now {
-                match (p.neg_was, p.pos_was) {
-                    // One side was already driving and the other just rose:
-                    // the ONLY moment the two modes disagree. The riser wins
-                    // under last-input; the incumbent keeps it under
-                    // first-input.
-                    (true, false) => p.pos_wins = self.socd_last,
-                    (false, true) => p.pos_wins = !self.socd_last,
-                    // Both rose at once (a full resync can do this): there is
-                    // no order to honor, so the NEGATIVE side wins — a fixed
-                    // answer, not a file-order accident, and the same one both
-                    // modes give so the tie cannot distinguish them.
-                    (false, false) => p.pos_wins = false,
-                    // Both were already held: the winner stands.
-                    (true, true) => {}
+                let (consume_neg, consume_pos) = match self.socd_policy {
+                    crate::Socd::Off => (false, false),
+                    crate::Socd::Neutral => (true, true),
+                    crate::Socd::UpPriority => {
+                        // Positive is up on a vertical control. Horizontal
+                        // opposition remains neutral under this policy.
+                        if p.vertical {
+                            (true, false)
+                        } else {
+                            (true, true)
+                        }
+                    }
+                    crate::Socd::LastInput | crate::Socd::FirstInput => {
+                        let last = matches!(self.socd_policy, crate::Socd::LastInput);
+                        match (p.neg_was, p.pos_was) {
+                            // One side was already driving and the other rose:
+                            // last-input chooses the riser, first-input the
+                            // incumbent.
+                            (true, false) => p.pos_wins = last,
+                            (false, true) => p.pos_wins = !last,
+                            // A full resync has no ordering evidence. Choose
+                            // negative deterministically for both policies.
+                            (false, false) => p.pos_wins = false,
+                            (true, true) => {}
+                        }
+                        (p.pos_wins, !p.pos_wins)
+                    }
+                };
+                if consume_neg {
+                    for &k in &p.neg {
+                        set_bit(&mut self.consumed, k, true);
+                    }
                 }
-                for j in 0..if p.pos_wins { p.neg.len() } else { p.pos.len() } {
-                    let k = if p.pos_wins { p.neg[j] } else { p.pos[j] };
-                    set_bit(&mut self.consumed, k, true);
+                if consume_pos {
+                    for &k in &p.pos {
+                        set_bit(&mut self.consumed, k, true);
+                    }
                 }
             }
             p.neg_was = neg_now;
@@ -759,15 +848,6 @@ impl SlotRuntime {
             }
         }
         self.macro_dirty.clear();
-    }
-
-    /// Cheap pass for an event on a device that is NOT this slot's chord
-    /// device: update that one key's heldness and apply it. Chord guards are
-    /// deliberately not re-evaluated against a foreign device's key bitset.
-    fn sync_key(&mut self, down: &[u64], dense: u32) {
-        self.scan.clear();
-        self.scan.push(dense);
-        self.apply_scan(down);
     }
 
     /// Step 1: which chords are satisfied, and what do they consume.
@@ -894,6 +974,7 @@ impl SlotRuntime {
         for t in &mut self.toggle {
             t.latched = false;
             t.source_was = false;
+            t.latched_by = None;
         }
         for p in &mut self.socd {
             p.neg_was = false;
@@ -1101,12 +1182,15 @@ impl SlotRuntime {
     /// can abort one macro and start another, and both land in the single delta
     /// batch that event produces. A macro is never interrupted by its own
     /// trigger — that is a retrigger, and [`Retrigger`] decides it.
-    fn macro_interrupt(&mut self, dense: u32, si: u8, timers: &mut Timers) {
+    fn macro_interrupt(&mut self, dense: u32, source: usize, si: u8, timers: &mut Timers) {
         for m in 0..self.macros.len() {
             let Some(step) = self.macros[m].step else {
                 continue;
             };
-            if !self.macros[m].interrupt.is_active() || self.macros[m].triggers.contains(&dense) {
+            if self.macros[m].source != source
+                || !self.macros[m].interrupt.is_active()
+                || self.macros[m].triggers.contains(&dense)
+            {
                 continue;
             }
             let abort = match self.macros[m].interrupt {
@@ -1147,6 +1231,21 @@ impl SlotRuntime {
             // A macro resting in a turbo gap holds nothing, but it is still
             // armed — leaving it would restart a sequence into a game the
             // player has just been disconnected from.
+            if self.macros[m].step.is_some() || self.macros[m].gapping {
+                self.macro_cancel(m, si, timers);
+                moved = true;
+            }
+        }
+        moved
+    }
+
+    /// Cancel only macros owned by one removed physical source.
+    fn cancel_source_macros(&mut self, source: usize, si: u8, timers: &mut Timers) -> bool {
+        let mut moved = false;
+        for m in 0..self.macros.len() {
+            if self.macros[m].source != source {
+                continue;
+            }
             if self.macros[m].step.is_some() || self.macros[m].gapping {
                 self.macro_cancel(m, si, timers);
                 moved = true;
@@ -1250,12 +1349,30 @@ impl SlotRuntime {
     /// item names. The exits still clear it: [`Self::cancel_all_toggle`] runs
     /// on session stop, device yank and the escape gesture, and a hot swap
     /// starts fresh tables (latches off) with the neutral deltas released.
-    fn sync_toggle(&mut self, down: &[u64]) {
+    fn sync_toggle(&mut self, down: &[u64], event_key: Option<u32>) {
         for t in 0..self.toggle.len() {
-            let driving = (0..self.toggle[t].sources.len())
-                .any(|i| self.holder_now(self.toggle[t].sources[i], down));
+            let mut driving = false;
+            let mut active_source = None;
+            for i in 0..self.toggle[t].sources.len() {
+                let holder = self.toggle[t].sources[i];
+                if self.holder_now(holder, down) {
+                    driving = true;
+                    let source = self.holder_sources[holder as usize];
+                    if source != usize::MAX {
+                        active_source.get_or_insert(source);
+                    }
+                }
+            }
             if driving && !self.toggle[t].source_was {
                 self.toggle[t].latched = !self.toggle[t].latched;
+                self.toggle[t].latched_by = if self.toggle[t].latched {
+                    event_key
+                        .map(|key| self.holder_sources[key as usize])
+                        .filter(|source| *source != usize::MAX)
+                        .or(active_source)
+                } else {
+                    None
+                };
                 self.mark(self.toggle_base + t as u32);
             }
             self.toggle[t].source_was = driving;
@@ -1278,6 +1395,22 @@ impl SlotRuntime {
             }
             self.toggle[t].latched = false;
             self.toggle[t].source_was = false;
+            self.toggle[t].latched_by = None;
+        }
+        moved
+    }
+
+    /// Release only latch state last raised by one removed source.
+    fn cancel_source_toggle(&mut self, source: usize) -> bool {
+        let mut moved = false;
+        for t in 0..self.toggle.len() {
+            if self.toggle[t].latched_by != Some(source) {
+                continue;
+            }
+            self.mark(self.toggle_base + t as u32);
+            moved = true;
+            self.toggle[t].latched = false;
+            self.toggle[t].latched_by = None;
         }
         moved
     }
@@ -1307,13 +1440,16 @@ fn set_bit(words: &mut [u64], k: u32, value: bool) {
 pub struct EngineTables {
     slots: Vec<SlotRuntime>,
     devices: Vec<DeviceId>,
-    index: HashMap<Key, u32>,
+    /// `(device, key)` -> one dense physical-holder id. Device identity is part
+    /// of the address: `A` on keyboard 1 and `A` on keyboard 2 are independent
+    /// even when both feed the same pad.
+    index: HashMap<InputAddress, u32>,
+    /// Dense physical-holder id -> owning device index. Kept flat so a device
+    /// yank can clear exactly its contribution without searching slot specs.
+    address_devices: Vec<usize>,
     targets: Vec<KeyTargets>,
+    /// One bit per source-qualified physical holder.
     down: Vec<u64>,
-    words: usize,
-    /// A permanently-empty key bitset, for a slot with no input device at all:
-    /// a macro can still be cancelled there, and releasing needs *some* `down`.
-    zeros: Vec<u64>,
     /// Dense key -> the stateful slots that must resync when it moves. Empty
     /// (and never consulted) when no preset in the build has a chord or macro.
     sync_slots: Vec<SyncSlots>,
@@ -1345,138 +1481,268 @@ impl EngineTables {
             "slot numbers must be unique"
         );
 
-        fn intern(devices: &mut Vec<DeviceId>, dev: &DeviceId) -> u8 {
+        fn intern(devices: &mut Vec<DeviceId>, dev: &DeviceId) -> usize {
             match devices.iter().position(|d| d == dev) {
-                Some(i) => i as u8,
+                Some(i) => i,
                 None => {
                     devices.push(dev.clone());
-                    (devices.len() - 1) as u8
+                    devices.len() - 1
                 }
             }
         }
 
         fn intern_key(
-            index: &mut HashMap<Key, u32>,
+            index: &mut HashMap<InputAddress, u32>,
             targets: &mut Vec<KeyTargets>,
+            address_devices: &mut Vec<usize>,
+            device: usize,
             key: Key,
         ) -> u32 {
-            *index.entry(key).or_insert_with(|| {
+            let address = InputAddress { device, key };
+            *index.entry(address).or_insert_with(|| {
                 targets.push(SmallVec::new());
+                address_devices.push(device);
                 (targets.len() - 1) as u32
             })
         }
 
         let mut devices: Vec<DeviceId> = Vec::new();
-        let mut index: HashMap<Key, u32> = HashMap::new();
+        let mut index: HashMap<InputAddress, u32> = HashMap::new();
+        let mut address_devices: Vec<usize> = Vec::new();
         let mut targets: Vec<KeyTargets> = Vec::new();
         let mut runtimes = Vec::with_capacity(slots.len());
 
         for (si, rs) in slots.iter().enumerate() {
-            let keyboard = rs.spec.keyboard.as_ref().map(|d| intern(&mut devices, d));
-            let mouse = rs.spec.mouse.as_ref().map(|d| intern(&mut devices, d));
-            let mut endpoint_keys: HashMap<PadControl, SmallVec<[u32; 4]>> = HashMap::new();
-            let mut axis_entries = Vec::new();
-
-            for &(key, binding) in &rs.preset.entries {
-                // Inert rows: placeholders ("function present, unbound"), and
-                // `Consume` outside a guard, which consumes nothing by
-                // definition (validation reports it).
-                if key == Key::None || binding == Binding::Consume {
-                    continue;
-                }
-                let dense = intern_key(&mut index, &mut targets, key);
-                targets[dense as usize].push(Target {
-                    slot: si as u8,
-                    binding,
+            let mut source_presets: Vec<(usize, &Preset)> =
+                Vec::with_capacity(rs.spec.sources.len());
+            let mut runtime_sources: SmallVec<[usize; 2]> = SmallVec::new();
+            for source in &rs.spec.sources {
+                let device = intern(&mut devices, &source.device);
+                let preset = rs.preset_for(source).unwrap_or_else(|| {
+                    panic!(
+                        "slot {} source preset '{}' was not resolved",
+                        rs.spec.number, source.preset
+                    )
                 });
-                if let Binding::Axis { axis, value } = binding {
-                    axis_entries.push((axis, value, dense));
-                } else if let Some(control) = PadControl::of(binding) {
-                    endpoint_keys.entry(control).or_default().push(dense);
+                source_presets.push((device, preset));
+                if !runtime_sources.contains(&device) {
+                    runtime_sources.push(device);
                 }
             }
 
-            // Chords, most-specific-first. Guard keys are interned even when
-            // nothing else binds them, so an event on a dedicated chord key
-            // still reaches the engine (`handle` early-returns on unknown
-            // keys). A chord keyed `Key::None` is an inert placeholder, like
-            // an unbound entry row.
-            let mut chords: Vec<&Chord> = rs
-                .preset
-                .chords
-                .iter()
-                .filter(|c| c.key != Key::None)
-                .collect();
-            // Stable, so equal-specificity chords keep preset order — the
-            // multi-bind case, where both fire and order is irrelevant.
-            chords.sort_by_key(|c| std::cmp::Reverse(c.specificity()));
-            let chord_rts: Vec<ChordRt> = chords
-                .iter()
-                .map(|c| ChordRt {
-                    binding: c.binding,
-                    trigger: intern_key(&mut index, &mut targets, c.key),
-                    when: c
-                        .when
+            let mut endpoint_keys: HashMap<PadControl, SmallVec<[u32; 4]>> = HashMap::new();
+            let mut axis_entries = Vec::new();
+            let mut chord_rts = Vec::new();
+            let mut macro_rts = Vec::new();
+            let mut turbo_rts = Vec::new();
+            let mut toggle_rts = Vec::new();
+            let mut socd_controls: [Vec<(u32, u8)>; 6] = std::array::from_fn(|_| Vec::new());
+            let mut seen_toggles: Vec<Binding> = Vec::new();
+
+            for &(source, preset) in &source_presets {
+                for &(key, binding) in &preset.entries {
+                    // Inert rows: placeholders ("function present, unbound"),
+                    // and `Consume` outside a guard, which consumes nothing by
+                    // definition (validation reports it).
+                    if key == Key::None || binding == Binding::Consume {
+                        continue;
+                    }
+                    let dense =
+                        intern_key(&mut index, &mut targets, &mut address_devices, source, key);
+                    targets[dense as usize].push(Target {
+                        slot: si as u8,
+                        binding,
+                    });
+                    if let Binding::Axis { axis, value } = binding {
+                        axis_entries.push((axis, value, dense));
+                    } else if let Some(control) = PadControl::of(binding) {
+                        endpoint_keys.entry(control).or_default().push(dense);
+                    }
+                    if rs.spec.socd.is_active() {
+                        if let Some(pointing) = crate::socd::pointing(binding) {
+                            let mask = if pointing.positive { 0b10 } else { 0b01 };
+                            let control = &mut socd_controls[socd_control_slot(pointing)];
+                            if let Some((_, directions)) =
+                                control.iter_mut().find(|(holder, _)| *holder == dense)
+                            {
+                                *directions |= mask;
+                            } else {
+                                control.push((dense, mask));
+                            }
+                        }
+                    }
+                }
+
+                // Guards are compiled inside the exact source address space.
+                // Equal key names on another keyboard therefore cannot satisfy,
+                // block or consume this source's chord.
+                for chord in preset.chords.iter().filter(|c| c.key != Key::None) {
+                    chord_rts.push(ChordRt {
+                        source,
+                        binding: chord.binding,
+                        trigger: intern_key(
+                            &mut index,
+                            &mut targets,
+                            &mut address_devices,
+                            source,
+                            chord.key,
+                        ),
+                        when: chord
+                            .when
+                            .iter()
+                            .filter(|key| **key != Key::None)
+                            .map(|&key| {
+                                intern_key(
+                                    &mut index,
+                                    &mut targets,
+                                    &mut address_devices,
+                                    source,
+                                    key,
+                                )
+                            })
+                            .collect(),
+                        unless: chord
+                            .unless
+                            .iter()
+                            .filter(|key| **key != Key::None)
+                            .map(|&key| {
+                                intern_key(
+                                    &mut index,
+                                    &mut targets,
+                                    &mut address_devices,
+                                    source,
+                                    key,
+                                )
+                            })
+                            .collect(),
+                        specificity: chord.specificity().min(usize::from(u16::MAX)) as u16,
+                        active: false,
+                    });
+                }
+
+                // Macro triggers and interrupt domains are source-qualified;
+                // step output still joins the destination slot's shared holder
+                // aggregation.
+                for (m, def) in preset.macros.defs.iter().enumerate() {
+                    macro_rts.push(MacroRt {
+                        source,
+                        ends: def.deadlines().collect(),
+                        min_visible: def.steps.iter().map(|step| step.min_visible_ms()).collect(),
+                        holds: def
+                            .steps
+                            .iter()
+                            .map(|step| step.hold.iter().copied().collect())
+                            .collect(),
+                        // Patched in pass two, after the final physical-holder
+                        // count is known.
+                        first_holder: 0,
+                        on_release: def.on_release,
+                        retrigger: def.retrigger,
+                        interrupt: def.interrupt,
+                        repeat: def.repeat,
+                        gap_ms: def.turbo_gap_ms(),
+                        triggers: preset
+                            .macros
+                            .triggers
+                            .iter()
+                            .filter(|trigger| {
+                                usize::from(trigger.index) == m && trigger.key != Key::None
+                            })
+                            .map(|trigger| {
+                                intern_key(
+                                    &mut index,
+                                    &mut targets,
+                                    &mut address_devices,
+                                    source,
+                                    trigger.key,
+                                )
+                            })
+                            .collect(),
+                        enabled: def.enabled,
+                        step: None,
+                        gapping: false,
+                        start: 0,
+                    });
+                }
+
+                for turbo in preset
+                    .turbo
+                    .iter()
+                    .filter(|turbo| turbo.binding != Binding::Consume)
+                {
+                    if let Some(existing) = turbo_rts
                         .iter()
-                        .filter(|k| **k != Key::None)
-                        .map(|&k| intern_key(&mut index, &mut targets, k))
-                        .collect(),
-                    unless: c
-                        .unless
+                        .find(|existing: &&TurboRt| existing.binding == turbo.binding)
+                    {
+                        assert_eq!(
+                            existing.hz, turbo.hz,
+                            "slot {} has conflicting turbo rates for {:?} across source presets",
+                            rs.spec.number, turbo.binding
+                        );
+                        continue;
+                    }
+                    turbo_rts.push(TurboRt {
+                        binding: turbo.binding,
+                        hz: turbo.hz,
+                        on_ms: turbo.on_ms(),
+                        off_ms: turbo.off_ms(),
+                        sources: SmallVec::new(),
+                        running: false,
+                        on: false,
+                    });
+                }
+
+                for &binding in preset
+                    .toggle
+                    .iter()
+                    .filter(|binding| **binding != Binding::Consume)
+                {
+                    if seen_toggles.contains(&binding) {
+                        continue;
+                    }
+                    seen_toggles.push(binding);
+                    toggle_rts.push(ToggleRt {
+                        binding,
+                        sources: SmallVec::new(),
+                        source_was: false,
+                        latched: false,
+                        latched_by: None,
+                    });
+                }
+            }
+
+            let socd_rts: Vec<SocdRt> = socd_controls
+                .into_iter()
+                .enumerate()
+                .filter_map(|(control, holders)| {
+                    // A holder driving both polarities is ambiguous and joins
+                    // neither side, matching `opposing_sides`' legacy rule.
+                    let neg: SmallVec<[u32; 2]> = holders
                         .iter()
-                        .filter(|k| **k != Key::None)
-                        .map(|&k| intern_key(&mut index, &mut targets, k))
-                        .collect(),
-                    specificity: c.specificity().min(usize::from(u16::MAX)) as u16,
-                    active: false,
+                        .filter_map(|&(holder, directions)| (directions == 0b01).then_some(holder))
+                        .collect();
+                    let pos: SmallVec<[u32; 2]> = holders
+                        .iter()
+                        .filter_map(|&(holder, directions)| (directions == 0b10).then_some(holder))
+                        .collect();
+                    (!neg.is_empty() && !pos.is_empty()).then_some(SocdRt {
+                        vertical: matches!(control, 1 | 3 | 5),
+                        neg,
+                        pos,
+                        neg_was: false,
+                        pos_was: false,
+                        pos_wins: false,
+                    })
                 })
                 .collect();
 
-            // Macros. Trigger keys are interned like guard keys, so a dedicated
-            // macro button with no other binding still reaches the engine. A
-            // macro with no steps, and a trigger with a dangling index, are
-            // both dropped here and reported by validation — the engine never
-            // panics on a preset it was handed.
-            let macro_rts: Vec<MacroRt> = rs
-                .preset
-                .macros
-                .defs
-                .iter()
-                .enumerate()
-                .map(|(m, def)| MacroRt {
-                    ends: def.deadlines().collect(),
-                    min_visible: def.steps.iter().map(|s| s.min_visible_ms()).collect(),
-                    // Patched in the second pass, which knows the final dense
-                    // key count (and therefore where holders start).
-                    first_holder: 0,
-                    on_release: def.on_release,
-                    retrigger: def.retrigger,
-                    interrupt: def.interrupt,
-                    repeat: def.repeat,
-                    // Resolved ONCE, off the hot path: the clamp, the cycle
-                    // arithmetic and the sampling floor all happen here, so the
-                    // scheduler only ever adds a number.
-                    gap_ms: def.turbo_gap_ms(),
-                    triggers: rs
-                        .preset
-                        .macros
-                        .triggers
-                        .iter()
-                        .filter(|t| usize::from(t.index) == m && t.key != Key::None)
-                        .map(|t| intern_key(&mut index, &mut targets, t.key))
-                        .collect(),
-                    enabled: def.enabled,
-                    step: None,
-                    gapping: false,
-                    start: 0,
-                })
-                .collect();
+            // `recompute_chords` processes specificity levels in order. Stable
+            // sorting preserves authored order within each level and source.
+            chord_rts.sort_by_key(|chord| std::cmp::Reverse(chord.specificity));
 
             runtimes.push(SlotRuntime {
                 number: rs.spec.number,
-                keyboard,
-                mouse,
-                chord_device: keyboard.or(mouse),
+                sources: runtime_sources,
                 endpoint_keys,
                 axis_entries,
                 axis_sign_last: [0; 4],
@@ -1485,6 +1751,7 @@ impl EngineTables {
                 chords: chord_rts,
                 chord_base: 0,
                 holder_bindings: Vec::new(),
+                holder_sources: Vec::new(),
                 all_holders: Vec::new(),
                 chord_keys: SmallVec::new(),
                 held: Vec::new(),
@@ -1496,89 +1763,19 @@ impl EngineTables {
                 macro_base: 0,
                 macro_dirty: Vec::new(),
                 macros_on: rs.spec.macros.is_on(),
-                // Turbo rows whose endpoint nothing in this preset drives are
-                // dropped here (a rate on an unbound function auto-fires
-                // nothing) and reported by validation. `sources` is filled in
-                // the second pass, which knows the final holder ids.
-                turbo: rs
-                    .preset
-                    .turbo
-                    .iter()
-                    .filter(|t| t.binding != Binding::Consume)
-                    .map(|t| TurboRt {
-                        binding: t.binding,
-                        // The clamp, the halving and the sampling floor all
-                        // happen HERE, once, off the hot path.
-                        on_ms: t.on_ms(),
-                        off_ms: t.off_ms(),
-                        sources: SmallVec::new(),
-                        running: false,
-                        on: false,
-                    })
-                    .collect(),
+                turbo: turbo_rts,
                 turbo_base: 0,
-                // Latch rows whose endpoint nothing drives are kept (indices
-                // must line up with holder ids) and never run, exactly like a
-                // turbo row on an unbound function. A duplicate endpoint
-                // behaves as one row; validation names both cases.
-                toggle: {
-                    let mut seen: Vec<Binding> = Vec::new();
-                    rs.preset
-                        .toggle
-                        .iter()
-                        .filter(|b| **b != Binding::Consume)
-                        .filter(|b| {
-                            if seen.contains(b) {
-                                false
-                            } else {
-                                seen.push(**b);
-                                true
-                            }
-                        })
-                        .map(|&binding| ToggleRt {
-                            binding,
-                            sources: SmallVec::new(),
-                            source_was: false,
-                            latched: false,
-                        })
-                        .collect()
-                },
+                toggle: toggle_rts,
                 toggle_base: 0,
-                // Order-aware SOCD (§2.6): the static policies arrived here
-                // as generated chords already ON the preset; only last-input
-                // and first-input build order memory. Sides come from the
-                // preset's own entries, so every key here is interned already
-                // — `intern_key` is only re-asked to say which id.
-                socd: if rs.spec.socd.is_runtime() {
-                    crate::socd::opposing_sides(&rs.preset)
-                        .into_iter()
-                        .map(|sides| SocdRt {
-                            neg: sides
-                                .neg
-                                .iter()
-                                .map(|&k| intern_key(&mut index, &mut targets, k))
-                                .collect(),
-                            pos: sides
-                                .pos
-                                .iter()
-                                .map(|&k| intern_key(&mut index, &mut targets, k))
-                                .collect(),
-                            neg_was: false,
-                            pos_was: false,
-                            pos_wins: false,
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                },
-                socd_last: matches!(rs.spec.socd, crate::Socd::LastInput),
+                socd: socd_rts,
+                socd_policy: rs.spec.socd,
                 socd_keys: SmallVec::new(),
                 stateful: false,
             });
         }
 
         let words = targets.len().div_ceil(64).max(1);
-        let down = vec![0u64; words * devices.len()];
+        let down = vec![0u64; words];
         for slot in &mut runtimes {
             slot.stateful = !slot.chords.is_empty()
                 || !slot.macros.is_empty()
@@ -1601,6 +1798,24 @@ impl EngineTables {
                 if !runtimes[si].stateful {
                     continue;
                 }
+                let source_presets: Vec<(usize, &Preset)> = rs
+                    .spec
+                    .sources
+                    .iter()
+                    .map(|source| {
+                        let device = devices
+                            .iter()
+                            .position(|candidate| candidate == &source.device)
+                            .expect("source device was interned in pass one");
+                        let preset = rs.preset_for(source).unwrap_or_else(|| {
+                            panic!(
+                                "slot {} source preset '{}' was not resolved",
+                                rs.spec.number, source.preset
+                            )
+                        });
+                        (device, preset)
+                    })
+                    .collect();
                 let macro_base = chord_base + runtimes[si].chords.len() as u32;
                 // Macro steps are holders too, laid out after the chords: one
                 // holder per step, so "this macro is on step i" is a bit.
@@ -1616,11 +1831,19 @@ impl EngineTables {
                 let holders = (toggle_base + runtimes[si].toggle.len() as u32) as usize;
                 let mut holder_bindings: Vec<SmallVec<[Binding; 2]>> =
                     vec![SmallVec::new(); holders];
-                for &(key, binding) in &rs.preset.entries {
-                    if key == Key::None || binding == Binding::Consume {
-                        continue;
+                let mut holder_sources = vec![usize::MAX; holders];
+                holder_sources[..address_devices.len()].copy_from_slice(&address_devices);
+                for &(source, preset) in &source_presets {
+                    for &(key, binding) in &preset.entries {
+                        if key == Key::None || binding == Binding::Consume {
+                            continue;
+                        }
+                        let address = InputAddress {
+                            device: source,
+                            key,
+                        };
+                        holder_bindings[index[&address] as usize].push(binding);
                     }
-                    holder_bindings[index[&key] as usize].push(binding);
                 }
                 // Every key on either side of an SOCD control, deduped — the
                 // scan companions to `chord_keys`, for the same reason: an
@@ -1637,6 +1860,7 @@ impl EngineTables {
                 for c in 0..runtimes[si].chords.len() {
                     let id = chord_base + c as u32;
                     let chord = &runtimes[si].chords[c];
+                    holder_sources[id as usize] = chord.source;
                     // A consume-only chord holds nothing: it never presses,
                     // never releases, and never joins an endpoint's holder
                     // list. It still consumes, which is the whole point.
@@ -1675,9 +1899,12 @@ impl EngineTables {
                 // an intermediate release.
                 for m in 0..runtimes[si].macros.len() {
                     let first = runtimes[si].macros[m].first_holder;
-                    for (i, step) in rs.preset.macros.defs[m].steps.iter().enumerate() {
+                    let source = runtimes[si].macros[m].source;
+                    for i in 0..runtimes[si].macros[m].holds.len() {
                         let id = first + i as u32;
-                        for &binding in &step.hold {
+                        holder_sources[id as usize] = source;
+                        for b in 0..runtimes[si].macros[m].holds[i].len() {
+                            let binding = runtimes[si].macros[m].holds[i][b];
                             if binding == Binding::Consume {
                                 continue; // nothing to hold; validation says so
                             }
@@ -1709,7 +1936,9 @@ impl EngineTables {
                 // being a second turbo mode.
                 //
                 // Only holders below `macro_base` are rewired, for turbo's
-                // reason: a macro step drives its endpoints flat.
+                // reason: a macro step drives its endpoints flat. The latch is
+                // destination-scoped, so holders from every physical source
+                // feeding this slot join one aggregate flipper.
                 for t in 0..runtimes[si].toggle.len() {
                     let id = toggle_base + t as u32;
                     let binding = runtimes[si].toggle[t].binding;
@@ -1754,7 +1983,8 @@ impl EngineTables {
                 // Only holders below `macro_base` are rewired — plus the
                 // latches above, which is the toggle-turbo composition: a
                 // latched endpoint with a rate is driven by the turbo, whose
-                // clock the LATCH gates. A macro step that holds the same
+                // clock the LATCH gates. Every source feeding the destination
+                // joins that one clock. A macro step that holds the same
                 // endpoint keeps driving it flat for the step's duration,
                 // because a sequence already owns a timeline and running it
                 // through a second clock would make it unreproducible.
@@ -1859,6 +2089,7 @@ impl EngineTables {
                     .max(1);
                 slot.scan = Vec::with_capacity(scan_cap);
                 slot.holder_bindings = holder_bindings;
+                slot.holder_sources = holder_sources;
                 slot.all_holders = all_holders;
                 slot.chord_keys = chord_keys;
                 slot.socd_keys = socd_keys;
@@ -1873,10 +2104,9 @@ impl EngineTables {
             slots: runtimes,
             devices,
             index,
+            address_devices,
             targets,
-            zeros: vec![0u64; words],
             down,
-            words,
             sync_slots,
             has_state,
             has_macros: macro_count > 0,
@@ -1895,13 +2125,13 @@ impl EngineTables {
 ///
 /// Stable KSX engine contract:
 ///
-/// - **Fan-out**: an event is translated for *every* slot whose keyboard or
-///   mouse matches the event's device — no early break. One physical keyboard
-///   (an I-PAC4) legitimately drives up to 4 pads with disjoint presets.
-/// - **All-keys-up**: a DIGITAL function releases only when *every* key mapped
-///   to it in that slot's preset is up on the event's device. Aggregation is by
-///   [`PadControl`] equality. The four stick axes do not aggregate this way —
-///   they resolve; see the next bullet.
+/// - **Fan-out and fan-in**: one physical source may feed several slots, and
+///   several independently mapped sources may feed one slot. Dispatch and
+///   holder identity are both `(device, key)`, never key name alone.
+/// - **All-sources-up**: a DIGITAL function releases only when every
+///   source-qualified holder mapped to it is up. Aggregation is by
+///   [`PadControl`] equality. The four stick axes do not aggregate this way;
+///   they resolve (next bullet).
 /// - **The analog resolver** (`docs/UNIVERSAL-IO.md` §2): an axis takes the
 ///   sign of the most recent rising demand on it and, among currently-held
 ///   holders of that sign, the largest magnitude; with no holder it is neutral.
@@ -1932,16 +2162,15 @@ pub struct Engine {
     slots: Vec<SlotRuntime>,
     /// Distinct devices assigned to any slot; events from others are ignored.
     devices: Vec<DeviceId>,
-    /// Key -> dense id. Built once; `handle` never scans presets.
-    index: HashMap<Key, u32>,
+    /// Source-qualified input address -> dense holder id. Built once; `handle`
+    /// never scans presets.
+    index: HashMap<InputAddress, u32>,
+    /// Dense physical holder -> owning device index.
+    address_devices: Vec<usize>,
     /// Dense id -> dispatch targets across all slots (fan-out preserved).
     targets: Vec<KeyTargets>,
-    /// Per-device key bitsets, `words` u64s per device: a key held on device A
-    /// is distinct from the same key held on device B.
+    /// One global bitset of source-qualified physical holders.
     down: Vec<u64>,
-    words: usize,
-    /// Stand-in key bitset for a slot with no device (see [`EngineTables`]).
-    zeros: Vec<u64>,
     /// Dense key -> stateful slots to resync (see [`EngineTables`]).
     sync_slots: Vec<SyncSlots>,
     /// The one branch chords and macros cost a configuration with neither.
@@ -1974,10 +2203,9 @@ impl Engine {
             slots,
             devices,
             index,
+            address_devices,
             targets,
             down,
-            words,
-            zeros,
             sync_slots,
             has_state,
             has_macros,
@@ -1988,10 +2216,9 @@ impl Engine {
             slots,
             devices,
             index,
+            address_devices,
             targets,
             down,
-            words,
-            zeros,
             sync_slots,
             has_state,
             has_macros,
@@ -2032,10 +2259,9 @@ impl Engine {
             mut slots,
             devices,
             index,
+            address_devices,
             targets,
             down,
-            words,
-            zeros,
             sync_slots,
             has_state,
             has_macros,
@@ -2052,10 +2278,9 @@ impl Engine {
         self.slots = slots;
         self.devices = devices;
         self.index = index;
+        self.address_devices = address_devices;
         self.targets = targets;
         self.down = down;
-        self.words = words;
-        self.zeros = zeros;
         self.sync_slots = sync_slots;
         self.has_state = has_state;
         self.has_macros = has_macros;
@@ -2098,13 +2323,16 @@ impl Engine {
         let Some(dev) = self.devices.iter().position(|d| d == &ev.device) else {
             return deltas;
         };
-        let Some(&dense) = self.index.get(&ev.key) else {
+        let Some(&dense) = self.index.get(&InputAddress {
+            device: dev,
+            key: ev.key,
+        }) else {
             return deltas;
         };
 
         // Key state updates before translation: the all-keys-up check must see
         // this transition applied.
-        let word = dev * self.words + (dense / 64) as usize;
+        let word = (dense / 64) as usize;
         let mask = 1u64 << (dense % 64);
         // Did this event actually MOVE the key?
         //
@@ -2123,15 +2351,11 @@ impl Engine {
             self.down[word] &= !mask;
         }
 
-        let dev8 = dev as u8;
-        // Fan-out is contractual: every matching slot is fed, including the
-        // multi-player I-PAC4 case.
+        // Fan-out is contractual. Targets are already source-qualified, so no
+        // secondary device filter can collapse equal key names from different
+        // keyboards.
         for &t in &self.targets[dense as usize] {
-            let down = &self.down[dev * self.words..(dev + 1) * self.words];
             let slot = &mut self.slots[t.slot as usize];
-            if slot.keyboard != Some(dev8) && slot.mouse != Some(dev8) {
-                continue;
-            }
             // A stateful slot resolves its whole holder set below instead: the
             // same press/release, but after consumption has been applied and
             // whatever the macro scheduler moved.
@@ -2139,38 +2363,32 @@ impl Engine {
                 continue;
             }
             if ev.down {
-                slot.press(t.binding, down);
+                slot.press(t.binding, &self.down);
             } else {
-                slot.release(t.binding, down);
+                slot.release(t.binding, &self.down);
             }
         }
         if self.has_state {
             for i in 0..self.sync_slots[dense as usize].len() {
                 let si = self.sync_slots[dense as usize][i] as usize;
-                let down = &self.down[dev * self.words..(dev + 1) * self.words];
                 let slot = &mut self.slots[si];
-                if slot.keyboard != Some(dev8) && slot.mouse != Some(dev8) {
-                    continue;
-                }
-                if slot.chord_device == Some(dev8) {
-                    // Macro triggers are evaluated on the slot's chord device
-                    // for the same reason guards are: a sequence belongs to one
-                    // panel, and "one device decides" is already the rule.
-                    // Interrupts first, so one press can stop one sequence and
-                    // start another inside a single delta batch.
-                    //
-                    // EDGES only: an autorepeat is not a new press, so it
-                    // neither starts a macro nor interrupts one.
-                    if edge {
-                        if ev.down {
-                            slot.macro_interrupt(dense, si as u8, &mut self.timers);
-                        }
-                        slot.macro_key(dense, ev.down, now, si as u8, &mut self.timers);
+                // Interrupts first, so one press can stop one sequence and
+                // start another inside a single delta batch. Macro ownership
+                // keeps both operations inside this event's exact source.
+                if edge {
+                    if ev.down {
+                        slot.macro_interrupt(dense, dev, si as u8, &mut self.timers);
                     }
-                    slot.sync(down, Some(dense), false, si as u8, now, &mut self.timers);
-                } else {
-                    slot.sync_key(down, dense);
+                    slot.macro_key(dense, ev.down, now, si as u8, &mut self.timers);
                 }
+                slot.sync(
+                    &self.down,
+                    Some(dense),
+                    false,
+                    si as u8,
+                    now,
+                    &mut self.timers,
+                );
             }
         }
 
@@ -2186,60 +2404,41 @@ impl Engine {
         let Some(dev) = self.devices.iter().position(|d| d == dev) else {
             return deltas;
         };
-        let base = dev * self.words;
-        let dev8 = dev as u8;
 
         for dense in 0..self.targets.len() as u32 {
-            let word = base + (dense / 64) as usize;
+            if self.address_devices[dense as usize] != dev {
+                continue;
+            }
+            let word = (dense / 64) as usize;
             let mask = 1u64 << (dense % 64);
             if self.down[word] & mask == 0 {
                 continue;
             }
             self.down[word] &= !mask;
             for &t in &self.targets[dense as usize] {
-                let down = &self.down[base..base + self.words];
                 let slot = &mut self.slots[t.slot as usize];
-                if slot.keyboard != Some(dev8) && slot.mouse != Some(dev8) {
-                    continue;
-                }
                 if slot.stateful {
                     continue;
                 }
-                slot.release(t.binding, down);
-            }
-            // A stateful slot fed by ANOTHER of its devices: this key's own
-            // heldness is all that can have moved.
-            if self.has_state {
-                for i in 0..self.sync_slots[dense as usize].len() {
-                    let si = self.sync_slots[dense as usize][i] as usize;
-                    let down = &self.down[base..base + self.words];
-                    let slot = &mut self.slots[si];
-                    if slot.keyboard != Some(dev8) && slot.mouse != Some(dev8) {
-                        continue;
-                    }
-                    if slot.chord_device != Some(dev8) {
-                        slot.sync_key(down, dense);
-                    }
-                }
+                slot.release(t.binding, &self.down);
             }
         }
-        // Every stateful slot on this device now resolves from an empty key
-        // state: chords fall inactive, consumption lifts, macros in flight are
-        // cancelled, everything releases — in one delta batch, which is the
-        // stuck-key invariant. A macro is the one holder a yank could not
-        // clear on its own: nobody is going to release its "key".
+
+        // Selective exit: physical holders and source-scoped macros clear for
+        // this device. Destination turbo is recomputed from every remaining
+        // holder; a latch clears only when this device raised it. Other source
+        // contributions therefore survive without compromising stuck-input
+        // cleanup when the removed source was the last owner.
         if self.has_state {
             let now = self.now;
             for si in 0..self.slots.len() {
-                let down = &self.down[base..base + self.words];
                 let slot = &mut self.slots[si];
-                if !slot.stateful || slot.chord_device != Some(dev8) {
+                if !slot.stateful || !slot.sources.contains(&dev) {
                     continue;
                 }
-                slot.cancel_all_macros(si as u8, &mut self.timers);
-                slot.cancel_all_turbo(si as u8, &mut self.timers);
-                slot.cancel_all_toggle();
-                slot.sync(down, None, true, si as u8, now, &mut self.timers);
+                slot.cancel_source_macros(dev, si as u8, &mut self.timers);
+                slot.cancel_source_toggle(dev);
+                slot.sync(&self.down, None, true, si as u8, now, &mut self.timers);
             }
         }
 
@@ -2293,16 +2492,11 @@ impl Engine {
 
     /// Is any trigger key of slot `si`'s macro `mac` still down?
     ///
-    /// Read from the slot's CHORD device, the same device its triggers are
-    /// evaluated on. A slot with no input device answers `false`: nobody is
-    /// holding anything there, so nothing may repeat.
+    /// Trigger ids are source-qualified, so the slot can safely query the one
+    /// global physical-holder bitset even when several keyboards feed it.
     fn trigger_held(&self, si: u8, mac: u16) -> bool {
         let slot = &self.slots[usize::from(si)];
-        let Some(dev) = slot.chord_device else {
-            return false;
-        };
-        let base = usize::from(dev) * self.words;
-        slot.macro_trigger_held(usize::from(mac), &self.down[base..base + self.words])
+        slot.macro_trigger_held(usize::from(mac), &self.down)
     }
 
     /// When [`Engine::tick`] next has something to do, in the same milliseconds
@@ -2398,16 +2592,7 @@ impl Engine {
             if self.slots[si].macro_dirty.is_empty() {
                 continue;
             }
-            let down = match self.slots[si].chord_device {
-                Some(dev) => {
-                    let base = usize::from(dev) * self.words;
-                    &self.down[base..base + self.words]
-                }
-                // No input device at all: nothing can be held by a key, so the
-                // all-keys-up check reads an empty world. Still releases.
-                None => &self.zeros[..],
-            };
-            self.slots[si].sync_macros(down);
+            self.slots[si].sync_macros(&self.down);
         }
         self.collect_deltas(deltas);
     }

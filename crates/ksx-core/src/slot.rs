@@ -56,6 +56,53 @@ pub const MAX_HIDMAESTRO_PADS: u8 = 1;
 #[error("slot number must be 1..={MAX_SLOTS}, got {0}")]
 pub struct InvalidSlotNumber(pub u8);
 
+/// The physical input family a [`SourceSpec`] contributes to a slot.
+///
+/// Kept deliberately small for the first multi-source model: keyboards and
+/// mice are the two source families the runtime already understands. New HID
+/// families can extend this enum when their event vocabulary lands; a device's
+/// identity must never be inferred from this classification.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum SourceKind {
+    Keyboard,
+    Mouse,
+}
+
+/// One independently mapped physical source feeding a virtual-controller slot.
+///
+/// The preset belongs to the source, rather than the slot, because two devices
+/// feeding one controller may intentionally translate the same physical control
+/// differently. The pair `(kind, device)` identifies where input originates;
+/// `preset` names the mapping applied to that source's events.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceSpec {
+    pub kind: SourceKind,
+    pub device: DeviceId,
+    /// Preset referenced by name; resolution happens in the config layer.
+    pub preset: String,
+}
+
+impl SourceSpec {
+    #[must_use]
+    pub fn new(kind: SourceKind, device: DeviceId, preset: impl Into<String>) -> Self {
+        Self {
+            kind,
+            device,
+            preset: preset.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn keyboard(device: DeviceId, preset: impl Into<String>) -> Self {
+        Self::new(SourceKind::Keyboard, device, preset)
+    }
+
+    #[must_use]
+    pub fn mouse(device: DeviceId, preset: impl Into<String>) -> Self {
+        Self::new(SourceKind::Mouse, device, preset)
+    }
+}
+
 /// Desired configuration of one slot — pure data. The runtime slot (pad
 /// handle, XInput user index, live invalidation) is orchestrated in ksx-backend.
 ///
@@ -65,10 +112,16 @@ pub struct InvalidSlotNumber(pub u8);
 pub struct SlotSpec {
     /// 1..=[`MAX_SLOTS`] (enforced by [`SlotSpec::new`]).
     pub number: u8,
-    pub keyboard: Option<DeviceId>,
-    pub mouse: Option<DeviceId>,
-    /// Preset referenced by name; resolution happens in the config layer.
-    pub preset: String,
+    /// Every independently mapped physical source feeding this slot.
+    ///
+    /// This is the canonical input model. [`SlotSpec::keyboard`],
+    /// [`SlotSpec::mouse`], and [`SlotSpec::primary_preset`] are compatibility
+    /// views over it, not separately stored state.
+    pub sources: Vec<SourceSpec>,
+    /// Preserves the preset passed to the legacy constructor when a slot has no
+    /// sources. It is deliberately private: source-bearing slots take their
+    /// mapping references exclusively from [`SlotSpec::sources`].
+    source_less_preset: String,
     /// Which controller this slot presents itself as. Defaults to
     /// [`Persona::Xbox360`]; set with [`SlotSpec::with_persona`].
     pub persona: Persona,
@@ -99,18 +152,86 @@ impl SlotSpec {
         mouse: Option<DeviceId>,
         preset: impl Into<String>,
     ) -> Result<Self, InvalidSlotNumber> {
+        let preset = preset.into();
+        let mut sources =
+            Vec::with_capacity(usize::from(keyboard.is_some()) + usize::from(mouse.is_some()));
+        if let Some(device) = keyboard {
+            sources.push(SourceSpec::keyboard(device, preset.clone()));
+        }
+        if let Some(device) = mouse {
+            sources.push(SourceSpec::mouse(device, preset.clone()));
+        }
+        Self::from_sources(number, sources, preset)
+    }
+
+    /// Builds a slot from its canonical, independently mapped sources.
+    ///
+    /// `source_less_preset` only has observable meaning when `sources` is empty.
+    /// It lets old source-less configurations round-trip without inventing a
+    /// synthetic device. When at least one source exists,
+    /// [`SlotSpec::primary_preset`] is the first source's preset.
+    pub fn from_sources(
+        number: u8,
+        sources: Vec<SourceSpec>,
+        source_less_preset: impl Into<String>,
+    ) -> Result<Self, InvalidSlotNumber> {
         if number == 0 || number > MAX_SLOTS {
             return Err(InvalidSlotNumber(number));
         }
         Ok(Self {
             number,
-            keyboard,
-            mouse,
-            preset: preset.into(),
+            sources,
+            source_less_preset: source_less_preset.into(),
             persona: Persona::default(),
             socd: Socd::default(),
             macros: MacroSwitch::default(),
         })
+    }
+
+    /// The first source of `kind`, preserving legacy single-source semantics.
+    #[must_use]
+    pub fn source(&self, kind: SourceKind) -> Option<&SourceSpec> {
+        self.sources.iter().find(|source| source.kind == kind)
+    }
+
+    /// Every source of `kind`, in authored order.
+    pub fn sources_of_kind(&self, kind: SourceKind) -> impl Iterator<Item = &SourceSpec> + '_ {
+        self.sources
+            .iter()
+            .filter(move |source| source.kind == kind)
+    }
+
+    /// Compatibility view of the first keyboard assigned to this slot.
+    #[must_use]
+    pub fn keyboard(&self) -> Option<&DeviceId> {
+        self.source(SourceKind::Keyboard)
+            .map(|source| &source.device)
+    }
+
+    /// Compatibility view of the first mouse assigned to this slot.
+    #[must_use]
+    pub fn mouse(&self) -> Option<&DeviceId> {
+        self.source(SourceKind::Mouse).map(|source| &source.device)
+    }
+
+    /// The mapping used as the slot's compatibility/default preset.
+    ///
+    /// A source-bearing slot returns the first authored source's preset. A
+    /// source-less legacy slot returns the otherwise-unrepresentable preset
+    /// supplied to [`SlotSpec::new`] or [`SlotSpec::from_sources`].
+    #[must_use]
+    pub fn primary_preset(&self) -> &str {
+        self.sources
+            .first()
+            .map_or(self.source_less_preset.as_str(), |source| {
+                source.preset.as_str()
+            })
+    }
+
+    /// Compatibility alias for [`SlotSpec::primary_preset`].
+    #[must_use]
+    pub fn preset(&self) -> &str {
+        self.primary_preset()
     }
 
     /// Sets the persona this slot presents itself as.
@@ -235,8 +356,62 @@ mod tests {
         for n in 1..=MAX_SLOTS {
             let spec = SlotSpec::new(n, Some(DeviceId::new("dev")), None, "p").unwrap();
             assert_eq!(spec.number, n);
-            assert_eq!(spec.preset, "p");
+            assert_eq!(spec.primary_preset(), "p");
         }
+    }
+
+    #[test]
+    fn legacy_constructor_expands_inputs_into_source_qualified_mappings() {
+        let keyboard = DeviceId::new("keyboard-a");
+        let mouse = DeviceId::new("mouse-a");
+        let spec = SlotSpec::new(1, Some(keyboard.clone()), Some(mouse.clone()), "shared").unwrap();
+
+        assert_eq!(
+            spec.sources,
+            vec![
+                SourceSpec::keyboard(keyboard.clone(), "shared"),
+                SourceSpec::mouse(mouse.clone(), "shared"),
+            ]
+        );
+        assert_eq!(spec.keyboard(), Some(&keyboard));
+        assert_eq!(spec.mouse(), Some(&mouse));
+        assert_eq!(spec.primary_preset(), "shared");
+        assert_eq!(spec.preset(), "shared");
+    }
+
+    #[test]
+    fn canonical_sources_allow_two_keyboards_with_independent_presets() {
+        let first = DeviceId::new("keyboard-a");
+        let second = DeviceId::new("keyboard-b");
+        let spec = SlotSpec::from_sources(
+            1,
+            vec![
+                SourceSpec::keyboard(first.clone(), "left-side"),
+                SourceSpec::keyboard(second.clone(), "right-side"),
+            ],
+            "unused-fallback",
+        )
+        .unwrap();
+
+        let keyboards = spec
+            .sources_of_kind(SourceKind::Keyboard)
+            .collect::<Vec<_>>();
+        assert_eq!(keyboards.len(), 2);
+        assert_eq!(keyboards[0].device, first);
+        assert_eq!(keyboards[0].preset, "left-side");
+        assert_eq!(keyboards[1].device, second);
+        assert_eq!(keyboards[1].preset, "right-side");
+        assert_eq!(spec.keyboard(), Some(&first));
+        assert_eq!(spec.primary_preset(), "left-side");
+    }
+
+    #[test]
+    fn source_less_legacy_slot_keeps_its_preset() {
+        let spec = SlotSpec::new(1, None, None, "cabinet-default").unwrap();
+        assert!(spec.sources.is_empty());
+        assert_eq!(spec.keyboard(), None);
+        assert_eq!(spec.mouse(), None);
+        assert_eq!(spec.primary_preset(), "cabinet-default");
     }
 
     /// The raise past the old eight-player guess is real, and the ceiling
@@ -280,7 +455,10 @@ mod tests {
         let ps = spec.clone().with_persona(Persona::PlayStation);
         assert_eq!(ps.persona, Persona::PlayStation);
         // …and changes nothing else about the slot.
-        assert_eq!((ps.number, ps.preset), (spec.number, spec.preset));
+        assert_eq!(
+            (ps.number, ps.primary_preset()),
+            (spec.number, spec.primary_preset())
+        );
     }
 
     #[test]

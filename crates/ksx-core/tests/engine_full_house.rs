@@ -255,6 +255,7 @@ fn duplicate_slot_numbers_are_refused_while_assertions_are_on() {
                 spec: SlotSpec::new(1, Some(dev.clone()), None, preset.name.clone())
                     .expect("valid slot number"),
                 preset,
+                additional_presets: Vec::new(),
             }
         })
         .collect();

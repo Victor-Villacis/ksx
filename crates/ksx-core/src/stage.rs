@@ -692,10 +692,7 @@ impl StagedSetup {
             .map_err(|err| StageRefusal::BadSlot { given: err.0 })?
             .with_persona(staged.persona)
             .with_socd(staged.socd);
-            slots.push(ResolvedSlot {
-                spec,
-                preset: staged.preset.clone(),
-            });
+            slots.push(ResolvedSlot::new(spec, staged.preset.clone()));
         }
         let xinput = self.xinput_slots();
         if xinput > usize::from(MAX_XINPUT_SLOTS) {
@@ -1347,11 +1344,11 @@ mod tests {
         assert_eq!(spec.device.alias, "panel");
         for slot in &spec.slots {
             assert_eq!(
-                slot.spec.keyboard.as_ref().map(|k| k.as_str()),
+                slot.spec.keyboard().map(|k| k.as_str()),
                 Some("usb:d209:0430:00"),
                 "every staged slot listens to the staged device"
             );
-            assert_eq!(slot.spec.preset, slot.preset.name);
+            assert_eq!(slot.spec.primary_preset(), slot.preset.name);
         }
         assert_eq!(spec.slots[0].spec.persona, Persona::Xbox360);
         assert_eq!(spec.slots[1].spec.persona, Persona::PlayStation);

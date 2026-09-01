@@ -49,6 +49,7 @@ fn engine_with_entries(mac: Macro, entries: Vec<(Key, Binding)>) -> Engine {
     Engine::new(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(dev), None, p.name.clone()).expect("valid slot"),
         preset: p,
+        additional_presets: Vec::new(),
     }])
 }
 
@@ -438,6 +439,7 @@ fn interrupt_opposing_aborts_when_another_macro_is_asked_for() {
     let mut engine = Engine::new(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(ipac_device()), None, p.name.clone()).expect("valid slot"),
         preset: p,
+        additional_presets: Vec::new(),
     }]);
 
     press(&mut engine, Key::P, 0);
@@ -504,6 +506,7 @@ fn a_hot_swap_releases_what_a_macro_held() {
     let tables = EngineTables::build(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(ipac_device()), None, plain.name.clone()).expect("valid slot"),
         preset: plain,
+        additional_presets: Vec::new(),
     }]);
     let deltas = engine.swap_tables(tables);
     assert_eq!(deltas.len(), 1);
@@ -615,6 +618,7 @@ fn triggers_fan_out_in_both_directions() {
     let mut engine = Engine::new(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(ipac_device()), None, p.name.clone()).expect("valid slot"),
         preset: p,
+        additional_presets: Vec::new(),
     }]);
 
     // One key, both macros, one batch.
@@ -646,6 +650,7 @@ fn simultaneous_deadlines_are_deterministic() {
     let mut engine = Engine::new(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(ipac_device()), None, p.name.clone()).expect("valid slot"),
         preset: p,
+        additional_presets: Vec::new(),
     }]);
 
     press(&mut engine, Key::P, 0);
@@ -675,6 +680,7 @@ fn an_empty_macro_and_a_dangling_trigger_are_inert() {
     let mut engine = Engine::new(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(ipac_device()), None, p.name.clone()).expect("valid slot"),
         preset: p,
+        additional_presets: Vec::new(),
     }]);
     assert_eq!(press(&mut engine, Key::P, 0), 0);
     assert_eq!(press(&mut engine, Key::Q, 0), 0);
@@ -826,6 +832,7 @@ fn socd_cleaning_never_touches_a_perpendicular_diagonal() {
         let mut engine = Engine::new(vec![ResolvedSlot {
             spec: SlotSpec::new(1, Some(ipac_device()), None, p.name.clone()).expect("valid slot"),
             preset: p,
+            additional_presets: Vec::new(),
         }]);
         press(&mut engine, Key::P, 0);
         engine.tick(50);
@@ -1210,6 +1217,7 @@ fn two_macros_on_one_key_superimpose_into_states_neither_one_holds() {
     let mut engine = Engine::new(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(ipac_device()), None, p.name.clone()).expect("valid slot"),
         preset: p,
+        additional_presets: Vec::new(),
     }]);
 
     press(&mut engine, Key::P, 0);
@@ -1350,6 +1358,7 @@ fn a_turbo_macro_on_the_same_key_is_what_keeps_repeating() {
     let mut engine = Engine::new(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(ipac_device()), None, p.name.clone()).expect("valid slot"),
         preset: p,
+        additional_presets: Vec::new(),
     }]);
 
     press(&mut engine, Key::P, 0);
@@ -1445,6 +1454,7 @@ fn the_slot_switch_overrides_the_individual_enables() {
             .expect("valid slot")
             .with_macros(ksx_core::MacroSwitch::Off),
         preset: p,
+        additional_presets: Vec::new(),
     }]);
     assert_eq!(press(&mut engine, Key::P, 0), 0);
     assert_eq!(engine.next_deadline(), None);

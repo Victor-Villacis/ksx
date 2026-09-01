@@ -27,6 +27,7 @@ fn engine_for(p: ksx_core::Preset) -> Engine {
     Engine::new(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(dev), None, p.name.clone()).expect("valid slot"),
         preset: p,
+        additional_presets: Vec::new(),
     }])
 }
 
@@ -235,6 +236,7 @@ fn every_exit_releases_the_latch() {
     let tables = EngineTables::build(vec![ResolvedSlot {
         spec: SlotSpec::new(1, Some(dev), None, "toggle").expect("valid slot"),
         preset: preset_with_toggle("toggle", vec![(Key::G, A)], Vec::new(), Vec::new(), vec![A]),
+        additional_presets: Vec::new(),
     }]);
     let deltas = e.swap_tables(tables);
     assert!(!a_down(&e), "a swap releases what the latch held");

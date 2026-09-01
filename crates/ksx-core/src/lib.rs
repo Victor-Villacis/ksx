@@ -84,8 +84,8 @@ pub use persona::{PadBackend, Persona, UnknownPersona};
 pub use preset::{Binding, Chord, Macros, Preset, TurboBinding};
 pub use selector::{DeviceFacts, DeviceRef, DeviceSelector, Match, Qualifier, SelectorParseError};
 pub use slot::{
-    InvalidSlotNumber, InvalidationReason, SlotSpec, MAX_HIDMAESTRO_PADS, MAX_SLOTS,
-    MAX_XINPUT_SLOTS,
+    InvalidSlotNumber, InvalidationReason, SlotSpec, SourceKind, SourceSpec, MAX_HIDMAESTRO_PADS,
+    MAX_SLOTS, MAX_XINPUT_SLOTS,
 };
 pub use socd::{DirMechanism, OpposingPair, OpposingSides, Pointing, Socd, UnknownSocd};
 pub use stage::{CommitSpec, StageRefusal, StagedDevice, StagedSetup, StagedSlot};

@@ -13,6 +13,7 @@ fn slot(number: u8, device: &DeviceId, preset: Preset) -> ResolvedSlot {
     ResolvedSlot {
         spec: SlotSpec::new(number, Some(device.clone()), None, preset.name.clone()).unwrap(),
         preset,
+        additional_presets: Vec::new(),
     }
 }
 

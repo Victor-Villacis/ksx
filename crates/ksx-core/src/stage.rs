@@ -904,11 +904,11 @@ impl StagedSetup {
     /// than of the sequence of calls that produced it, so a future operation
     /// that forgets a rule cannot leak a bad setup past here.
     pub fn commit(&self) -> Result<CommitSpec, StageRefusal> {
-        let Some(device) = self.device().cloned() else {
+        if self.devices.is_empty() {
             return Err(StageRefusal::NoDevice {
                 slots: self.slots.len(),
             });
-        };
+        }
         if self.slots.is_empty() {
             return Err(StageRefusal::NoSlots);
         }
@@ -1014,9 +1014,31 @@ impl StagedSetup {
         let Some(blocking) = self.blocking else {
             return Err(StageRefusal::BlockingUnanswered);
         };
+        // Canvas membership is broader than the runnable graph: a user may
+        // intentionally place a spare keyboard without mapping it yet. Save
+        // and Play must not capture or persist that inert board. Preserve the
+        // staged roster's order, but carry only devices referenced by at least
+        // one controller route; the first routed device is the legacy
+        // compatibility field.
+        let devices = self
+            .devices
+            .iter()
+            .filter(|device| {
+                self.slots.iter().any(|slot| {
+                    slot.routes
+                        .iter()
+                        .any(|route| route.selector == device.selector)
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let device = devices
+            .first()
+            .cloned()
+            .expect("every committed slot established at least one routed staged device");
         Ok(CommitSpec {
             device,
-            devices: self.devices.clone(),
+            devices,
             slots,
             blocking,
         })
@@ -1901,6 +1923,31 @@ mod tests {
             next.set_blocking(Blocking::Whole).commit().unwrap().devices,
             [updated]
         );
+    }
+
+    #[test]
+    fn commit_excludes_canvas_only_keyboards_from_the_runtime_device_roster() {
+        let canvas_only = device();
+        let routed = other_device();
+        let setup = StagedSetup::new()
+            .add_device(canvas_only.clone())
+            .unwrap()
+            .add_device(routed.clone())
+            .unwrap()
+            .add_slot_for_source(
+                1,
+                Persona::Xbox360,
+                &routed.selector,
+                routed_preset("Player 1 - desk", Key::Q, XButton::A),
+            )
+            .unwrap()
+            .set_blocking(Blocking::Whole);
+
+        assert_eq!(setup.devices(), &[canvas_only, routed.clone()]);
+        let committed = setup.commit().unwrap();
+        assert_eq!(committed.device, routed.clone());
+        assert_eq!(committed.devices, [routed]);
+        assert_eq!(committed.slots[0].spec.sources.len(), 1);
     }
 
     #[test]

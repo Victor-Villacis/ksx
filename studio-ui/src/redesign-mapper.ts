@@ -12,9 +12,9 @@
 //  - the SOURCE PIN: a gesture is pinned to the staged input's verified
 //    Windows identity captured at arm time, and a hit from any other
 //    device is ignored with its own sentence;
-//  - the TARGET PIN: the served `target_revision` travels with the gesture
-//    and the server refuses a stale row (this module also re-checks before
-//    every commit);
+//  - the TARGET PIN: the exact source route's served revision and selector
+//    travel with the gesture, and the server refuses a stale row (this
+//    module also re-checks both before every commit);
 //  - the conflict dialog: cross-slot fan-out is asked about, never
 //    assumed — "Use here too" retries the SAME pinned gesture with force.
 //
@@ -60,6 +60,12 @@ export interface MapperTarget {
   bindingAuthorityPinned?: boolean;
   expectedDevice?: string;
   expectedInstance?: string;
+  /** Control-first gestures follow the island's current authoring focus;
+   * key-first gestures carry their clicked board explicitly and do not. */
+  followsAuthoringFocus?: boolean;
+  /** Routed state served with the exact source revision. `false` is the
+   * supported first-bind projection, not an absent source. */
+  expectedSourceRouted?: boolean;
 }
 
 /** One control of the selected slot, for the auto-map walk — the served
@@ -68,6 +74,34 @@ export interface MapperControl {
   function: string;
   label: string;
   keys: string[];
+}
+
+/** Physical board identity supplied by a keyboard click. The selector is the
+ * durable source key; instance is the live-device corroboration used by the
+ * learner. */
+export interface MapperSourcePin {
+  selector: string;
+  instance: string;
+}
+
+/** One exact keyboard route (or eligible first-bind projection) under one
+ * controller. Both source_id and sourceId are accepted so the Rust wire and a
+ * camel-cased host adapter can share this mapper without copying the rules. */
+export interface MapperPadSource {
+  source_id?: string;
+  sourceId?: string;
+  revision: string;
+  preset: string;
+  controls?: MapperControl[];
+  routed?: boolean;
+}
+
+export interface MapperPad {
+  slot: number;
+  preset: string;
+  /** Present (including empty) is the source-qualified contract. An older
+   * payload without it is display-compatible but mapping fails closed. */
+  sources?: MapperPadSource[];
 }
 
 /** What the island lends the mapper — every page truth as a port, so this
@@ -82,9 +116,9 @@ export interface MapperHost {
   /** The staged input's verified identity pair (served; empty = refuse to
    *  arm — the fail-closed rule). */
   learnSource(): { selector: string; instance: string };
-  /** The served pads (target revisions + controls) — always the CURRENT
-   *  array, re-read after every refresh. */
-  pads(): { slot: number; target_revision?: string; preset: string }[];
+  /** The served pads (exact source revisions + controls) — always the
+   * CURRENT array, re-read after every refresh. */
+  pads(): MapperPad[];
   selectedSlot(): string;
   controlsFor(slot: string): MapperControl[];
   /** The page's one mutation gate (the entry's beginMutation/endMutation),
@@ -117,11 +151,22 @@ let lastWrite: {
   chain: boolean;
   assignMode: "replace" | "add" | "remove";
 } = { origin: "learn", chain: false, assignMode: "replace" };
-let autoMap: { steps: { fn: string; label: string }[]; idx: number; bound: number } | null = null;
+let autoMap: {
+  steps: { fn: string; label: string }[];
+  idx: number;
+  bound: number;
+  slot: string;
+  sourcePin: SourceAuthorityPin;
+} | null = null;
 let assignKey: string | null = null;
 let assignMode: "replace" | "add" | "remove" = "replace";
-let assignSourcePin: { expectedDevice: string; expectedInstance: string } | null = null;
-let assignDraftRevision = "";
+interface SourceAuthorityPin {
+  expectedDevice: string;
+  expectedInstance: string;
+  followsAuthoringFocus: boolean;
+}
+let assignSourcePin: SourceAuthorityPin | null = null;
+let assignSourceSignature = "";
 let assignTimer: number | undefined;
 
 export function mapperWire(h: MapperHost): void {
@@ -202,10 +247,28 @@ function hideBanner(): void {
   setChainBox(false);
 }
 
-function setKeyCue(text: string | null): void {
-  const cue = host?.root()?.querySelector<HTMLElement>(
-    '[data-mapping-source="true"] .rd-keycue',
-  );
+function sourceId(source: MapperPadSource): string {
+  return (source.source_id ?? source.sourceId ?? "").trim();
+}
+
+function sourcePinOf(row: MapperTarget): SourceAuthorityPin {
+  return {
+    expectedDevice: row.expectedDevice?.trim() ?? "",
+    expectedInstance: row.expectedInstance?.trim() ?? "",
+    followsAuthoringFocus: row.followsAuthoringFocus === true,
+  };
+}
+
+function sourceBoard(pin: SourceAuthorityPin | null): HTMLElement | null {
+  const root = host?.root();
+  if (!root || !pin?.expectedDevice) return null;
+  return Array.from(root.querySelectorAll<HTMLElement>("[data-source-id]")).find((candidate) =>
+    sameIdentity(candidate.dataset.sourceId, pin.expectedDevice)
+  ) ?? null;
+}
+
+function setKeyCue(text: string | null, pin: SourceAuthorityPin | null): void {
+  const cue = sourceBoard(pin)?.querySelector<HTMLElement>(".rd-keycue") ?? null;
   if (!cue) return;
   cue.classList.toggle("none", text === null);
   const span = cue.querySelector<HTMLElement>(".rd-keycue-text");
@@ -253,20 +316,18 @@ function markArmedRow(fnName: string | null, slot?: string): void {
   }
 }
 
-/** Mark every drawing of the key held in hand — the plate cell(s) and the
- *  Keys-tab rows. Nocturne's markAssignTargets, this page's tiers. */
-function markAssignTargets(key: string | null): void {
+/** Mark every drawing of the key held in hand on its exact physical board.
+ * A second board may expose the same symbol and must remain untouched. */
+function markAssignTargets(key: string | null, pin: SourceAuthorityPin | null): void {
   const root = host?.root();
   if (!root) return;
   for (const el of Array.from(root.querySelectorAll<HTMLElement>(".assign"))) {
     el.classList.remove("assign");
   }
-  if (key) {
+  const board = sourceBoard(pin);
+  if (key && board) {
     for (const el of Array.from(
-      root.querySelectorAll<HTMLElement>(
-        `[data-mapping-source="true"] .n-kb [data-key="${CSS.escape(key)}"], ` +
-          `.rd-insp-krows [data-key="${CSS.escape(key)}"]`,
-      ),
+      board.querySelectorAll<HTMLElement>(`.n-kb [data-key="${CSS.escape(key)}"]`),
     )) {
       el.classList.add("assign");
     }
@@ -278,39 +339,121 @@ function markAssignTargets(key: string | null): void {
  *  this page's panels rebuild more often, so the pass is exported. */
 export function mapperRemark(): void {
   if (learnRow) markArmedRow(learnRow.fn, learnRow.slot);
-  if (assignKey) markAssignTargets(assignKey);
+  if (assignKey) markAssignTargets(assignKey, assignSourcePin);
 }
 
 // ── Pinning (nocturne's, against this page's served truth) ───────────────
-function captureSourcePin(): { expectedDevice: string; expectedInstance: string } {
-  const source = host?.learnSource() ?? { selector: "", instance: "" };
+function captureSourcePin(
+  explicit?: MapperSourcePin,
+  followsAuthoringFocus = explicit === undefined,
+): SourceAuthorityPin {
+  const source = explicit ?? host?.learnSource() ?? { selector: "", instance: "" };
   return {
     expectedDevice: source.selector.trim(),
     expectedInstance: source.instance.trim(),
+    followsAuthoringFocus,
   };
 }
 
-function stagedRevisionSignature(): string {
-  return (host?.pads() ?? [])
-    .map((pad) => `${pad.slot}:${pad.target_revision?.trim() ?? ""}`)
+function sourceRevisionSignature(pin: SourceAuthorityPin | null): string {
+  if (!pin?.expectedDevice) return "";
+  const pads = host?.pads() ?? [];
+  return pads
+    .map((pad) => {
+      const source = pad.sources?.find((candidate) =>
+        sameIdentity(sourceId(candidate), pin.expectedDevice)
+      );
+      return `${pad.slot}:${source?.revision.trim() ?? "missing"}:${source?.routed === false ? "new" : "routed"}`;
+    })
     .sort()
     .join("\n");
 }
 
-function pinTarget(row: MapperTarget): MapperTarget | null {
-  if (row.bindingAuthorityPinned && row.expectedTargetRevision !== undefined) return row;
-  const pad = (host?.pads() ?? []).find((p) => String(p.slot) === row.slot);
-  const revision = pad?.target_revision?.trim() ?? "";
-  if (!revision) return null;
-  const source = row.bindingAuthorityPinned
-    ? { expectedDevice: row.expectedDevice ?? "", expectedInstance: row.expectedInstance ?? "" }
-    : captureSourcePin();
+interface TargetAuthority {
+  revision: string;
+  routed?: boolean;
+  canonicalDevice: string;
+}
+
+function targetAuthority(
+  pads: readonly MapperPad[],
+  slot: string,
+  expectedDevice: string,
+): TargetAuthority | null {
+  const pad = pads.find((candidate) => String(candidate.slot) === slot);
+  if (!pad) return null;
+  if (pad.sources !== undefined) {
+    const source = pad.sources.find((candidate) =>
+      sameIdentity(sourceId(candidate), expectedDevice)
+    );
+    const revision = source?.revision.trim() ?? "";
+    const canonicalDevice = source ? sourceId(source) : "";
+    if (!source || !revision || !canonicalDevice) return null;
+    return {
+      revision,
+      routed: source.routed,
+      canonicalDevice,
+    };
+  }
+  return null;
+}
+
+/** Pure source-qualified pinning seam used by every interaction and by the
+ * focused protocol tests. */
+export function mapperPinTarget(
+  pads: readonly MapperPad[],
+  row: MapperTarget,
+  authoringSource: MapperSourcePin,
+): MapperTarget | null {
+  const focusPin = captureSourcePin(authoringSource, true);
+  const expectedDevice = row.expectedDevice?.trim() || focusPin.expectedDevice;
+  const followsAuthoringFocus = row.followsAuthoringFocus ?? !row.expectedDevice?.trim();
+  if (
+    followsAuthoringFocus &&
+    row.expectedDevice?.trim() &&
+    !sameIdentity(row.expectedDevice, focusPin.expectedDevice)
+  ) {
+    return null;
+  }
+  if (
+    followsAuthoringFocus &&
+    row.expectedInstance?.trim() &&
+    !sameIdentity(row.expectedInstance, focusPin.expectedInstance)
+  ) {
+    return null;
+  }
+  const authority = targetAuthority(pads, row.slot, expectedDevice);
+  if (!authority) return null;
+  const alreadyPinnedRevision = row.expectedTargetRevision?.trim() ?? "";
+  if (alreadyPinnedRevision && alreadyPinnedRevision !== authority.revision) return null;
+  if (
+    alreadyPinnedRevision &&
+    row.expectedSourceRouted !== undefined &&
+    row.expectedSourceRouted !== authority.routed
+  ) {
+    return null;
+  }
+  const expectedInstance = row.expectedInstance?.trim() ||
+    (sameIdentity(authority.canonicalDevice, focusPin.expectedDevice)
+      ? focusPin.expectedInstance
+      : "");
   return {
     ...row,
-    expectedTargetRevision: row.expectedTargetRevision ?? revision,
+    expectedTargetRevision: authority.revision,
     bindingAuthorityPinned: true,
-    ...source,
+    expectedDevice: authority.canonicalDevice,
+    expectedInstance,
+    followsAuthoringFocus,
+    expectedSourceRouted: authority.routed,
   };
+}
+
+function pinTarget(row: MapperTarget): MapperTarget | null {
+  return mapperPinTarget(
+    host?.pads() ?? [],
+    row,
+    host?.learnSource() ?? { selector: "", instance: "" },
+  );
 }
 
 function sameIdentity(left: string | undefined, right: string): boolean {
@@ -318,15 +461,25 @@ function sameIdentity(left: string | undefined, right: string): boolean {
   return a !== "" && a.toLowerCase() === right.trim().toLowerCase();
 }
 
-function hitBelongsToPin(row: MapperTarget, learn: RdLearnView): boolean {
-  const selector = learn.selector?.trim() ?? "";
-  const device = learn.device?.trim() ?? "";
-  if (sameIdentity(row.expectedDevice, selector)) return true;
-  if (sameIdentity(row.expectedInstance, device)) return true;
+export function mapperSourceMatchesTarget(
+  row: MapperTarget,
+  source: MapperSourcePin,
+): boolean {
+  if (sameIdentity(row.expectedDevice, source.selector)) return true;
+  if (sameIdentity(row.expectedInstance, source.instance)) return true;
   return false;
 }
 
+function hitBelongsToPin(row: MapperTarget, learn: RdLearnView): boolean {
+  return mapperSourceMatchesTarget(row, {
+    selector: learn.selector?.trim() ?? "",
+    instance: learn.device?.trim() ?? "",
+  });
+}
+
 function sourceAuthorityCurrent(row: MapperTarget): boolean {
+  if (!row.expectedDevice?.trim()) return false;
+  if (row.followsAuthoringFocus !== true) return true;
   const now = captureSourcePin();
   return (
     sameIdentity(row.expectedDevice, now.expectedDevice) &&
@@ -335,18 +488,69 @@ function sourceAuthorityCurrent(row: MapperTarget): boolean {
 }
 
 function sourcePinAuthorityCurrent(
-  pin: { expectedDevice: string; expectedInstance: string } | null,
+  pin: SourceAuthorityPin | null,
 ): boolean {
   if (!pin) return false;
+  if (!pin.followsAuthoringFocus) return pin.expectedDevice !== "";
   const now = captureSourcePin();
   return sameIdentity(pin.expectedDevice, now.expectedDevice) &&
     sameIdentity(pin.expectedInstance, now.expectedInstance);
 }
 
 function targetAuthorityCurrent(row: MapperTarget): boolean {
-  const pad = (host?.pads() ?? []).find((p) => String(p.slot) === row.slot);
-  const revision = pad?.target_revision?.trim() ?? "";
-  return revision !== "" && revision === row.expectedTargetRevision?.trim();
+  const current = targetAuthority(host?.pads() ?? [], row.slot, row.expectedDevice?.trim() ?? "");
+  return current !== null &&
+    current.revision === row.expectedTargetRevision?.trim() &&
+    (row.expectedSourceRouted === undefined || current.routed === row.expectedSourceRouted);
+}
+
+export interface MapperBindPayload {
+  slot: number;
+  expected_device: string;
+  expected_target_revision: string;
+  function: string;
+  key: string;
+  mode: "replace" | "add" | "remove";
+  force: boolean;
+}
+
+/** The exact wire write. Keeping composition pure makes it impossible for a
+ * conflict retry or a second source using the same key to drop identity. */
+export function mapperBindPayload(
+  row: MapperTarget,
+  key: string,
+  force: boolean,
+): MapperBindPayload {
+  return {
+    slot: Number(row.slot),
+    expected_device: row.expectedDevice?.trim() ?? "",
+    expected_target_revision: row.expectedTargetRevision?.trim() ?? "",
+    function: row.fn,
+    key,
+    mode: row.mode,
+    force,
+  };
+}
+
+/** A successful source edit is confirmed only by that source's new revision,
+ * or by the exact route disappearing. An unrelated source or top-level slot
+ * revision is deliberately irrelevant. */
+export function mapperTargetAdvanced(
+  pads: readonly MapperPad[],
+  row: MapperTarget,
+): boolean {
+  const pad = pads.find((candidate) => String(candidate.slot) === row.slot);
+  if (!pad) return true;
+  if (pad.sources !== undefined) {
+    const source = pad.sources.find((candidate) =>
+      sameIdentity(sourceId(candidate), row.expectedDevice?.trim() ?? "")
+    );
+    if (!source) return true;
+    if (row.expectedSourceRouted === true && source.routed === false) return true;
+    const revision = source.revision.trim();
+    return revision !== "" && revision !== row.expectedTargetRevision?.trim();
+  }
+  return false;
 }
 
 /** A fresh payload arrived: retire any armed gesture whose authority it
@@ -364,7 +568,7 @@ export function mapperReconcile(): void {
   if (
     assignKey &&
     (!sourcePinAuthorityCurrent(assignSourcePin) ||
-      assignDraftRevision !== stagedRevisionSignature())
+      assignSourceSignature !== sourceRevisionSignature(assignSourcePin))
   ) {
     cancelAssign();
     retired = true;
@@ -400,8 +604,13 @@ function reopenTarget(row: MapperTarget, mode: "replace" | "add" | "remove"): Ma
     mode,
     expectedTargetRevision: undefined,
     bindingAuthorityPinned: undefined,
-    expectedDevice: undefined,
-    expectedInstance: undefined,
+    // A chain continues authoring the same physical keyboard route. Only the
+    // revision is refreshed; silently switching to the then-current board
+    // would turn "Bind several" into cross-device mapping.
+    expectedDevice: row.expectedDevice,
+    expectedInstance: row.expectedInstance,
+    followsAuthoringFocus: row.followsAuthoringFocus,
+    expectedSourceRouted: undefined,
   };
 }
 
@@ -429,12 +638,13 @@ function stopLearnTimer(): void {
 }
 
 function retireLearn(): void {
+  const retired = learnRow;
   learnGen += 1;
   learnRow = null;
   daemonGen = null;
   stopLearnTimer();
   hideBanner();
-  setKeyCue(null);
+  setKeyCue(null, retired ? sourcePinOf(retired) : null);
   markArmedRow(null);
 }
 
@@ -530,6 +740,7 @@ function armUi(row: MapperTarget): void {
     row.mode === "remove"
       ? `Waiting — press the key to remove from ${row.label}, or click it on the plate`
       : `Waiting — press a key for ${row.label}, or click one on the plate`,
+    sourcePinOf(row),
   );
   markArmedRow(row.fn, row.slot);
 }
@@ -616,7 +827,7 @@ async function pollLearn(observed?: RdLearnView): Promise<void> {
 // ── The one commit boundary ──────────────────────────────────────────────
 async function writeLearnedKey(row: MapperTarget, key: string, force: boolean): Promise<boolean> {
   const pinned = pinTarget(row);
-  if (!pinned || (force && pinned !== row)) {
+  if (!pinned || (force && row.bindingAuthorityPinned !== true)) {
     autoMap = null;
     dismissConflict();
     host?.flash(
@@ -655,14 +866,7 @@ async function writeLearnedKey(row: MapperTarget, key: string, force: boolean): 
     outcome = await fetchJSON<RdBindOutcome>("/redesign/api/bind", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        slot: Number(row.slot),
-        expected_target_revision: row.expectedTargetRevision,
-        function: row.fn,
-        key,
-        mode: row.mode,
-        force,
-      }),
+      body: JSON.stringify(mapperBindPayload(row, key, force)),
     });
   } catch {
     host?.endMutation(gate);
@@ -687,13 +891,10 @@ async function writeLearnedKey(row: MapperTarget, key: string, force: boolean): 
     // target, rather than reusing the token that just committed.
     await host?.refresh();
     host?.endMutation(gate);
-    const refreshed = (host?.pads() ?? [])
-      .find((pad) => String(pad.slot) === row.slot)
-      ?.target_revision?.trim() ?? "";
-    if (!refreshed || refreshed === row.expectedTargetRevision?.trim()) {
+    if (!mapperTargetAdvanced(host?.pads() ?? [], row)) {
       autoMap = null;
       host?.flash(
-        `error: ${line} KSX could not confirm the new draft revision, so mapping stopped — refresh the canvas before mapping another control.`,
+        `error: ${line} KSX could not confirm the exact keyboard route's new draft revision, so mapping stopped — refresh the canvas before mapping another control.`,
       );
       return false;
     }
@@ -924,7 +1125,7 @@ export function conflictForce(): void {
     .then((ok) => {
       if (!ok || !held.chain) return;
       if (held.origin === "assign") {
-        armAssign(held.key, held.assignMode);
+        armAssignWithPin(held.key, held.assignMode, sourcePinOf(held.row));
         setChainBox(true);
       } else if (!autoMap) {
         void startLearn(reopenTarget(held.row, "add"));
@@ -949,12 +1150,22 @@ export function conflictOpen(): boolean {
 }
 
 // ── The BY-KEY assign twin ───────────────────────────────────────────────
-export function armAssign(key: string, mode: "replace" | "add" | "remove" = "replace"): void {
+function armAssignWithPin(
+  key: string,
+  mode: "replace" | "add" | "remove",
+  sourcePin: SourceAuthorityPin,
+): void {
   if (learnRow) void cancelLearn();
+  if (!sourcePin.expectedDevice) {
+    host?.flash(
+      "error: This key is not attached to an exact keyboard source. Nothing was armed.",
+    );
+    return;
+  }
   assignKey = key;
   assignMode = mode;
-  assignSourcePin = captureSourcePin();
-  assignDraftRevision = stagedRevisionSignature();
+  assignSourcePin = sourcePin;
+  assignSourceSignature = sourceRevisionSignature(sourcePin);
   const deadline = Date.now() + ASSIGN_WINDOW_MS;
   setBanner(
     "rd-learnbar n-learnbar listen",
@@ -967,7 +1178,7 @@ export function armAssign(key: string, mode: "replace" | "add" | "remove" = "rep
     false,
     true,
   );
-  markAssignTargets(key);
+  markAssignTargets(key, sourcePin);
   if (assignTimer !== undefined) window.clearInterval(assignTimer);
   assignTimer = window.setInterval(() => {
     const secs = Math.ceil((deadline - Date.now()) / 1000);
@@ -981,16 +1192,27 @@ export function armAssign(key: string, mode: "replace" | "add" | "remove" = "rep
   }, 250);
 }
 
+/** Hold one exact board's key in hand. Existing callers may omit source and
+ * use the current authoring focus; keyboard clicks should pass their own
+ * selector/instance as the third argument. */
+export function armAssign(
+  key: string,
+  mode: "replace" | "add" | "remove" = "replace",
+  source?: MapperSourcePin,
+): void {
+  armAssignWithPin(key, mode, captureSourcePin(source));
+}
+
 export function cancelAssign(): void {
   assignKey = null;
   assignSourcePin = null;
-  assignDraftRevision = "";
+  assignSourceSignature = "";
   if (assignTimer !== undefined) {
     window.clearInterval(assignTimer);
     assignTimer = undefined;
   }
   hideBanner();
-  markAssignTargets(null);
+  markAssignTargets(null, null);
 }
 
 export function assignHeld(): string | null {
@@ -1019,13 +1241,20 @@ export function resolveAssignWithControl(
       label,
       slot,
       mode,
-      ...(sourcePin ? { bindingAuthorityPinned: true as const, ...sourcePin } : {}),
+      ...(sourcePin
+        ? {
+            bindingAuthorityPinned: true as const,
+            expectedDevice: sourcePin.expectedDevice,
+            expectedInstance: sourcePin.expectedInstance,
+            followsAuthoringFocus: sourcePin.followsAuthoringFocus,
+          }
+        : {}),
     },
     held,
     false,
   ).then((ok) => {
     if (ok && chain) {
-      armAssign(held, mode);
+      if (sourcePin) armAssignWithPin(held, mode, sourcePin);
       setChainBox(true);
     }
   });
@@ -1034,12 +1263,23 @@ export function resolveAssignWithControl(
 
 /** A key was CLICKED (on the plate or a Keys row) while a learn is armed:
  *  it resolves the learn exactly like pressing it. */
-export function resolveLearnWithKey(key: string, shiftChain: boolean): boolean {
+export function resolveLearnWithKey(
+  key: string,
+  shiftChain: boolean,
+  source?: MapperSourcePin,
+): boolean {
   const row = learnRow;
   if (!row) return false;
   const chain = shiftChain || chainWanted();
   lastWrite = { origin: "learn", chain, assignMode: "replace" };
   void cancelLearn();
+  if (source && !mapperSourceMatchesTarget(row, source)) {
+    autoMap = null;
+    host?.flash(
+      `error: Ignored ${key} from another keyboard. The selected controller binding was not changed.`,
+    );
+    return true;
+  }
   void writeLearnedKey(row, key, false).then((ok) => {
     if (ok && chain && !autoMap) {
       void startLearn(reopenTarget(row, "add"));
@@ -1052,6 +1292,17 @@ export function resolveLearnWithKey(key: string, shiftChain: boolean): boolean {
 // ── The auto-map walk ────────────────────────────────────────────────────
 export function startAutoMap(): void {
   const slot = host?.selectedSlot() ?? "";
+  const sourcePin = captureSourcePin();
+  if (
+    !sourcePin.expectedDevice ||
+    !sourcePin.expectedInstance ||
+    !targetAuthority(host?.pads() ?? [], slot, sourcePin.expectedDevice)
+  ) {
+    host?.flash(
+      "error: Select an input with an exact staged route before starting auto-map. Nothing changed.",
+    );
+    return;
+  }
   const steps = (host?.controlsFor(slot) ?? [])
     .filter((control) => control.keys.length === 0)
     .map((control) => ({ fn: control.function, label: control.label }));
@@ -1059,7 +1310,7 @@ export function startAutoMap(): void {
     host?.flash("Every control on this controller already has a key. Nothing to walk.");
     return;
   }
-  autoMap = { steps, idx: 0, bound: 0 };
+  autoMap = { steps, idx: 0, bound: 0, slot, sourcePin };
   stepAutoMap();
 }
 
@@ -1073,7 +1324,15 @@ function stepAutoMap(): void {
     host?.flash(`Auto-map finished — ${bound} control${bound === 1 ? "" : "s"} bound.`);
     return;
   }
-  void startLearn({ fn: step.fn, label: step.label, slot: host?.selectedSlot() ?? "", mode: "replace" });
+  void startLearn({
+    fn: step.fn,
+    label: step.label,
+    slot: walk.slot,
+    mode: "replace",
+    expectedDevice: walk.sourcePin.expectedDevice,
+    expectedInstance: walk.sourcePin.expectedInstance,
+    followsAuthoringFocus: true,
+  });
 }
 
 function autoMapAdvance(didBind: boolean): void {
@@ -1097,8 +1356,11 @@ export function autoMapRunning(): boolean {
 /** A slot selection change ends any armed gesture — the pane speaks for
  *  one controller at a time (nocturne's seat-change rule). */
 export function mapperOnSlotChange(): void {
+  // A write may have retired its listener while the walk is waiting for the
+  // refreshed source revision. A slot switch in that interval still owns the
+  // same cancellation rule.
+  if (autoMap) autoMap = null;
   if (learnRow) {
-    autoMap = null;
     void cancelLearn();
   }
   if (assignKey) cancelAssign();

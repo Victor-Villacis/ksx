@@ -10,8 +10,9 @@
 //! wanted left a fourth write and a backup behind it.
 //!
 //! A staged setup is its own value and **never touches disk**. It holds the
-//! chosen device, the chosen persona per slot, the bindings so far, and the
-//! blocking answer. It lives in the daemon for the length of a visit. Nothing
+//! chosen input devices in authored order, the chosen persona per slot, each
+//! device-qualified mapping route, and the blocking answer. It lives in the
+//! daemon for the length of a visit. Nothing
 //! is claimed, nothing is plugged, no config file is written, until the user
 //! says so — and even then, [`StagedSetup::commit`] (save) and the play path
 //! are separate acts.
@@ -38,19 +39,26 @@
 //! - [`MAX_XINPUT_SLOTS`] caps the personas that occupy one of Windows' four
 //!   XInput slots, counted through [`Persona::is_xinput`] — which is why
 //!   `playstation` is plain HID, takes none, and is how players 5+ exist;
-//! - [`MAX_SLOTS`] caps the total, through [`SlotSpec::new`]'s own check.
+//! - [`MAX_SLOTS`] caps the total, through [`SlotSpec::from_sources`]'s own
+//!   check.
 //!
 //! Refusals name what would make the choice legal. A refusal with no way
 //! forward is just an error message.
 //!
-//! # The two things [`StagedSetup::commit`] refuses that no operation can
+//! # Whole-setup facts [`StagedSetup::commit`] refuses
 //!
 //! Every rule above is a fact about ONE edit, so an operation can check it.
-//! Two are facts about the setup as a WHOLE, and they are the two ways a
-//! screen could report success while nothing works:
+//! Some are facts about the setup as a WHOLE, and they are ways a screen could
+//! report success while nothing works:
 //!
 //! - **a controller that binds nothing** ([`StageRefusal::NoBindings`]) — the
 //!   pad plugs, the game sees a controller, every button is dead;
+//! - **a routed keyboard whose preset binds nothing**
+//!   ([`StageRefusal::NoRouteBindings`]) — the UI claims that physical source
+//!   feeds the pad, but every key from it is inert;
+//! - **a controller with no input route** ([`StageRefusal::NoSources`]) — it
+//!   may remain temporarily after one keyboard is removed, but cannot play or
+//!   save until another source is routed or the controller is removed;
 //! - **an unanswered split-or-freeze question**
 //!   ([`StageRefusal::BlockingUnanswered`]) — resolving it to
 //!   [`Blocking::default`] would silently freeze a first-run user's keyboard,
@@ -68,7 +76,7 @@ use crate::engine::ResolvedSlot;
 use crate::persona::Persona;
 use crate::preset::Preset;
 use crate::selector::DeviceSelector;
-use crate::slot::{SlotSpec, MAX_HIDMAESTRO_PADS, MAX_SLOTS, MAX_XINPUT_SLOTS};
+use crate::slot::{SlotSpec, SourceSpec, MAX_HIDMAESTRO_PADS, MAX_SLOTS, MAX_XINPUT_SLOTS};
 use crate::socd::Socd;
 
 /// The capture backend a staged device will use once the setup is committed.
@@ -99,7 +107,7 @@ impl std::fmt::Display for StageCaptureBackend {
     }
 }
 
-/// The input device a staged setup is built on.
+/// One input device a staged setup is built on.
 ///
 /// **A [`DeviceSelector`], never a raw path** (`docs/DEVICE-IDENTITY.md` §1):
 /// what is staged is *which board*, so the setup keeps meaning the same thing
@@ -126,21 +134,33 @@ pub struct StagedDevice {
     pub backend: StageCaptureBackend,
 }
 
-/// One staged controller: the slot number, what it presents itself as, and the
-/// bindings so far.
+/// One keyboard-to-controller route while a setup is still in memory.
 ///
-/// The bindings are a whole [`Preset`] because that is the unit the rest of ksx
-/// already speaks — the engine takes one, the file format is one, and a staged
-/// slot that held some smaller edit shape would need a translation into a
-/// preset at save time, which is the second translation §2 forbids.
+/// The selector, rather than an alias or a vector index, is the route's
+/// identity. Aliases are presentation/config spelling and may be edited;
+/// insertion order is presentation order and may shift when another keyboard
+/// is removed. The selector is the durable fact both operations preserve.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StagedRoute {
+    pub selector: DeviceSelector,
+    pub preset: Preset,
+}
+
+/// One staged controller: the slot number, what it presents itself as, and its
+/// source-qualified bindings so far.
+///
+/// Each route's bindings are a whole [`Preset`] because that is the unit the
+/// rest of ksx already speaks — the engine and file format both resolve named
+/// presets. `preset` remains the first-route compatibility view; [`StagedRoute`]
+/// is the canonical fan-in model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StagedSlot {
     /// 1..=[`MAX_SLOTS`].
     pub number: u8,
     /// What this slot presents itself as. Gated by [`Persona::can_plug`].
     pub persona: Persona,
-    /// The bindings accumulated so far, carrying their own name — which is the
-    /// name of the preset file a save will write.
+    /// Compatibility view of the first route's bindings, carrying the preset
+    /// file name existing callers display and edit.
     pub preset: Preset,
     /// What this slot does with simultaneous opposing directions — the same
     /// [`Socd`] a saved `[[slot]]` carries, staged here so a setup can answer
@@ -148,6 +168,25 @@ pub struct StagedSlot {
     /// carries the answer into the one [`CommitSpec`] both exits read.
     /// Defaults to [`Socd::Off`], exactly as [`SlotSpec::new`] does.
     pub socd: Socd,
+    /// Independently mapped keyboards feeding this controller, kept in the
+    /// same relative order as [`StagedSetup::devices`].
+    ///
+    /// `preset` above remains the compatibility view of the first route. New
+    /// callers should read [`StagedSlot::routes`] so two keyboards may use two
+    /// different mappings without collapsing back to a shared preset.
+    routes: Vec<StagedRoute>,
+}
+
+impl StagedSlot {
+    /// Every source-qualified route feeding this controller.
+    pub fn routes(&self) -> &[StagedRoute] {
+        &self.routes
+    }
+
+    /// The route for one staged keyboard selector.
+    pub fn route(&self, selector: &DeviceSelector) -> Option<&StagedRoute> {
+        self.routes.iter().find(|route| &route.selector == selector)
+    }
 }
 
 /// A setup being explored. In memory only; **nothing here can write**.
@@ -158,7 +197,9 @@ pub struct StagedSlot {
 /// user who is told "no" is provably left holding exactly what they had.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StagedSetup {
-    device: Option<StagedDevice>,
+    /// In authored order, unique by selector. The first entry is the
+    /// compatibility device returned by [`StagedSetup::device`].
+    devices: Vec<StagedDevice>,
     /// Kept sorted by slot number.
     slots: Vec<StagedSlot>,
     /// `None` = **not asked yet**, which is a different fact from "the user
@@ -247,6 +288,18 @@ pub enum StageRefusal {
         alias: String,
         problem: &'static str,
     },
+    #[error(
+        "keyboard selectors '{selector}' and '{other}' both use alias \"{alias}\" — config aliases resolve by exact spelling, so saving both would make one source resolve as the other. Give either keyboard a distinct alias"
+    )]
+    DuplicateAlias {
+        alias: String,
+        selector: String,
+        other: String,
+    },
+    #[error("keyboard selector '{selector}' is not staged, so it cannot own a controller route")]
+    NoSuchDevice { selector: String },
+    #[error("slot {number} has no route from keyboard selector '{selector}'")]
+    NoSuchRoute { number: u8, selector: String },
     /// Two staged slots hold presets that share a NAME but not a BODY.
     ///
     /// One name is one preset file, so saving these would collapse them into
@@ -276,6 +329,21 @@ pub enum StageRefusal {
          control, then save or play. Nothing has been written, so fixing it costs nothing"
     )]
     NoBindings { number: u8, preset: String },
+    #[error(
+        "slot {number}'s route from keyboard selector '{selector}' uses preset \"{preset}\", but that preset binds no key to any control — bind that source or remove its route"
+    )]
+    NoRouteBindings {
+        number: u8,
+        selector: String,
+        preset: String,
+    },
+    /// A controller survived an edit but none of the remaining keyboards feed
+    /// it. This is distinct from `NoDevice`: other staged keyboards may still
+    /// feed other controllers.
+    #[error(
+        "slot {number} has no keyboard route, so it would plug a controller that no physical input can drive — route a staged keyboard to it or remove the controller"
+    )]
+    NoSources { number: u8 },
     /// **Split-or-freeze has not been answered.**
     ///
     /// `docs/FIRST-RUN.md` §3 asks it once, and [`StagedSetup::blocking`] keeps
@@ -298,7 +366,7 @@ pub enum StageRefusal {
     /// Committing (or planning) with no device chosen.
     #[error(
         "no keyboard has been chosen yet, so there is nothing for these {slots} slot(s) to \
-         listen to — pick a device first"
+         listen to — pick a device first, or add one to a multi-keyboard setup"
     )]
     NoDevice { slots: usize },
     /// Committing (or planning) with no slots.
@@ -349,9 +417,14 @@ impl StageRefusal {
             Self::TooManyXinputSlots { .. } => "too-many-xinput-slots",
             Self::TooManyHidMaestroPads { .. } => "too-many-hidmaestro-pads",
             Self::BadAlias { .. } => "bad-alias",
+            Self::DuplicateAlias { .. } => "duplicate-alias",
+            Self::NoSuchDevice { .. } => "no-such-device",
+            Self::NoSuchRoute { .. } => "no-such-route",
             Self::PresetNameClash { .. } => "preset-name-clash",
             Self::UnnamedPreset { .. } => "unnamed-preset",
             Self::NoBindings { .. } => "no-bindings",
+            Self::NoRouteBindings { .. } => "no-route-bindings",
+            Self::NoSources { .. } => "no-sources",
             Self::BlockingUnanswered => "blocking-unanswered",
             Self::NoDevice { .. } => "no-device",
             Self::NoSlots => "no-slots",
@@ -363,19 +436,24 @@ impl StageRefusal {
 
 /// Everything a finished staging means, as one typed value.
 ///
-/// **The single source both paths read.** `ksx-app`'s `crate::stage` turns this
+/// **The single typed source of truth both paths read.** `ksx-app`'s
+/// `crate::stage` turns this
 /// into the `ConfigFile` a save writes AND into the `RunPlan` a play runs, with
 /// one translation used by both — which is what makes "what is staged is what
 /// plays" a structural fact instead of a promise.
 ///
 /// [`Self::slots`] is [`ResolvedSlot`], the very type `RunPlan::slots` holds:
-/// a slot spec with its preset already beside it.
+/// a slot spec with its primary and additional routed presets already beside
+/// it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommitSpec {
+    /// Compatibility view of [`Self::devices`]'s first keyboard.
     pub device: StagedDevice,
-    /// Slot order. Every one names [`Self::device`] as its keyboard.
+    /// Every staged keyboard in authored order, unique by selector.
+    pub devices: Vec<StagedDevice>,
+    /// Slot order. Each slot carries its own source-qualified keyboard routes.
     pub slots: Vec<ResolvedSlot>,
-    /// How much of the keyboard a session takes away from Windows.
+    /// How much of the staged keyboards a session takes away from Windows.
     ///
     /// **Always the answer the user gave.** [`StagedSetup::commit`] refuses an
     /// unanswered setup ([`StageRefusal::BlockingUnanswered`]), so there is no
@@ -386,13 +464,20 @@ pub struct CommitSpec {
 }
 
 impl StagedSetup {
-    /// An empty stage: no device, no controllers, nothing asked.
+    /// An empty stage: no devices, no controllers, nothing asked.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// The first staged keyboard, retained as the exact compatibility view
+    /// callers used when a setup could hold only one.
     pub fn device(&self) -> Option<&StagedDevice> {
-        self.device.as_ref()
+        self.devices.first()
+    }
+
+    /// Every staged keyboard in authored order, unique by selector.
+    pub fn devices(&self) -> &[StagedDevice] {
+        &self.devices
     }
 
     /// The staged controllers, in slot order.
@@ -413,7 +498,7 @@ impl StagedSetup {
     /// Nothing staged at all. `true` for a fresh visit and after
     /// [`Self::discard`].
     pub fn is_empty(&self) -> bool {
-        self.device.is_none() && self.slots.is_empty() && self.blocking.is_none()
+        self.devices.is_empty() && self.slots.is_empty() && self.blocking.is_none()
     }
 
     /// The lowest slot number not staged yet, or `None` when all
@@ -440,35 +525,98 @@ impl StagedSetup {
             .count()
     }
 
-    /// Choose the input device. Replaces any earlier choice — that is the whole
-    /// point of moment 4, and it costs nothing because nothing was written.
+    /// Choose the input device. Replaces every earlier choice — the exact
+    /// singleton behavior this method had before staged fan-in.
+    ///
+    /// New multi-keyboard callers use [`Self::upsert_device`] instead. Keeping
+    /// replacement here matters: an existing surface's "choose another
+    /// keyboard" action must not silently turn into "add another keyboard".
     pub fn choose_device(&self, device: StagedDevice) -> Result<Self, StageRefusal> {
-        let alias = device.alias.trim();
-        if alias.is_empty() {
-            return Err(StageRefusal::BadAlias {
-                alias: device.alias.clone(),
-                problem: "an alias is the short name a [[slot]] refers to, and an empty one \
-                          refers to nothing",
-            });
-        }
-        if alias.contains('\\') {
-            return Err(StageRefusal::BadAlias {
-                alias: device.alias.clone(),
-                problem: "a value containing a backslash is read as a literal device path \
-                          everywhere else in the config, so it could never resolve back to this \
-                          entry",
-            });
-        }
+        let device = normalize_device(device)?;
         let mut next = self.clone();
-        next.device = Some(StagedDevice {
-            alias: alias.to_owned(),
-            ..device
-        });
+        next.devices = vec![device.clone()];
+        for slot in &mut next.slots {
+            slot.routes = vec![StagedRoute {
+                selector: device.selector.clone(),
+                preset: slot.preset.clone(),
+            }];
+        }
         Ok(next)
     }
 
-    /// Change only the chosen device's capture backend, provided it is still
-    /// the device the caller prepared.
+    /// Add a keyboard without replacing any earlier one, or update the
+    /// metadata of the same selector in place.
+    ///
+    /// Selector equality is the upsert key. Updating an alias, label or
+    /// backend therefore cannot duplicate a physical source or move it in the
+    /// authored order, and every existing route remains attached.
+    pub fn upsert_device(&self, device: StagedDevice) -> Result<Self, StageRefusal> {
+        let device = normalize_device(device)?;
+        if let Some(other) = self
+            .devices
+            .iter()
+            .find(|other| other.selector != device.selector && other.alias == device.alias)
+        {
+            return Err(StageRefusal::DuplicateAlias {
+                alias: device.alias.clone(),
+                selector: device.selector.to_string(),
+                other: other.selector.to_string(),
+            });
+        }
+        let mut next = self.clone();
+        if let Some(existing) = next
+            .devices
+            .iter_mut()
+            .find(|existing| existing.selector == device.selector)
+        {
+            *existing = device;
+            return Ok(next);
+        }
+
+        let first = next.devices.is_empty();
+        next.devices.push(device.clone());
+        if first {
+            for slot in &mut next.slots {
+                if slot.routes.is_empty() {
+                    slot.routes.push(StagedRoute {
+                        selector: device.selector.clone(),
+                        preset: slot.preset.clone(),
+                    });
+                }
+            }
+        }
+        Ok(next)
+    }
+
+    /// Additive spelling for [`Self::upsert_device`]. A repeated selector is
+    /// an in-place metadata update, never a duplicate row.
+    pub fn add_device(&self, device: StagedDevice) -> Result<Self, StageRefusal> {
+        self.upsert_device(device)
+    }
+
+    /// Remove one staged keyboard and only the routes that name it.
+    /// Controllers and routes owned by other keyboards remain untouched.
+    pub fn remove_device(&self, selector: &DeviceSelector) -> Result<Self, StageRefusal> {
+        if !self
+            .devices
+            .iter()
+            .any(|device| &device.selector == selector)
+        {
+            return Err(StageRefusal::NoSuchDevice {
+                selector: selector.to_string(),
+            });
+        }
+        let mut next = self.clone();
+        next.devices.retain(|device| &device.selector != selector);
+        for slot in &mut next.slots {
+            slot.routes.retain(|route| &route.selector != selector);
+            sync_compatibility_preset(slot);
+        }
+        Ok(next)
+    }
+
+    /// Change only one staged device's capture backend, provided it is still
+    /// the selector the caller prepared.
     ///
     /// Comparing typed selectors is the stale-action guard: a UAC prompt may
     /// remain open while another tab chooses a different board.  The completed
@@ -478,20 +626,18 @@ impl StagedSetup {
         expected: &DeviceSelector,
         backend: StageCaptureBackend,
     ) -> Result<Self, StageRefusal> {
-        let Some(current) = &self.device else {
+        let Some(index) = self
+            .devices
+            .iter()
+            .position(|device| &device.selector == expected)
+        else {
             return Err(StageRefusal::DeviceChanged {
                 expected: expected.to_string(),
-                current: "no keyboard is currently staged".to_owned(),
+                current: staged_devices_description(&self.devices),
             });
         };
-        if &current.selector != expected {
-            return Err(StageRefusal::DeviceChanged {
-                expected: expected.to_string(),
-                current: format!("'{}'", current.selector),
-            });
-        }
         let mut next = self.clone();
-        next.device.as_mut().expect("checked above").backend = backend;
+        next.devices[index].backend = backend;
         Ok(next)
     }
 
@@ -509,16 +655,51 @@ impl StagedSetup {
         }
         check_pluggable(persona)?;
         let mut next = self.clone();
+        let routes = self
+            .device()
+            .map(|device| {
+                vec![StagedRoute {
+                    selector: device.selector.clone(),
+                    preset: preset.clone(),
+                }]
+            })
+            .unwrap_or_default();
         next.slots.push(StagedSlot {
             number,
             persona,
             preset,
             socd: Socd::default(),
+            routes,
         });
         next.slots.sort_by_key(|s| s.number);
         next.check_persona_capacity(number, persona)?;
         next.check_xinput_ceiling(number)?;
         next.check_hidmaestro_pool(number)?;
+        Ok(next)
+    }
+
+    /// Stage a controller whose initial bindings belong to one explicit
+    /// keyboard. This is the source-qualified counterpart to [`Self::add_slot`]
+    /// and does not implicitly route the compatibility/first keyboard.
+    pub fn add_slot_for_source(
+        &self,
+        number: u8,
+        persona: Persona,
+        selector: &DeviceSelector,
+        preset: Preset,
+    ) -> Result<Self, StageRefusal> {
+        self.require_device(selector)?;
+        let mut next = self.add_slot(number, persona, preset.clone())?;
+        let slot = next
+            .slots
+            .iter_mut()
+            .find(|slot| slot.number == number)
+            .expect("add_slot inserted it");
+        slot.routes = vec![StagedRoute {
+            selector: selector.clone(),
+            preset,
+        }];
+        sync_compatibility_preset(slot);
         Ok(next)
     }
 
@@ -561,7 +742,77 @@ impl StagedSetup {
             .iter_mut()
             .find(|s| s.number == number)
             .ok_or(StageRefusal::NoSuchSlot { number })?;
-        slot.preset = preset;
+        slot.preset = preset.clone();
+        if let Some(route) = slot.routes.first_mut() {
+            route.preset = preset;
+        } else if let Some(device) = next.devices.first() {
+            slot.routes.push(StagedRoute {
+                selector: device.selector.clone(),
+                preset,
+            });
+        }
+        Ok(next)
+    }
+
+    /// Add or replace one source-qualified mapping route on a staged slot.
+    /// Existing routes for other keyboards are left byte-for-byte intact.
+    pub fn set_source_bindings(
+        &self,
+        number: u8,
+        selector: &DeviceSelector,
+        preset: Preset,
+    ) -> Result<Self, StageRefusal> {
+        check_slot_number(number)?;
+        self.require_device(selector)?;
+        let mut next = self.clone();
+        let slot = next
+            .slots
+            .iter_mut()
+            .find(|slot| slot.number == number)
+            .ok_or(StageRefusal::NoSuchSlot { number })?;
+        if let Some(route) = slot
+            .routes
+            .iter_mut()
+            .find(|route| &route.selector == selector)
+        {
+            route.preset = preset;
+        } else {
+            slot.routes.push(StagedRoute {
+                selector: selector.clone(),
+                preset,
+            });
+        }
+        sort_routes(&next.devices, slot);
+        sync_compatibility_preset(slot);
+        Ok(next)
+    }
+
+    /// Remove one keyboard's route from one controller without removing the
+    /// keyboard or any of its routes to other controllers.
+    pub fn remove_source_bindings(
+        &self,
+        number: u8,
+        selector: &DeviceSelector,
+    ) -> Result<Self, StageRefusal> {
+        check_slot_number(number)?;
+        self.require_device(selector)?;
+        let Some(staged) = self.slot(number) else {
+            return Err(StageRefusal::NoSuchSlot { number });
+        };
+        if staged.route(selector).is_none() {
+            return Err(StageRefusal::NoSuchRoute {
+                number,
+                selector: selector.to_string(),
+            });
+        }
+        let mut next = self.clone();
+        let slot = next
+            .slots
+            .iter_mut()
+            .find(|slot| slot.number == number)
+            .expect("checked above");
+        slot.routes.retain(|route| &route.selector != selector);
+        sync_compatibility_preset(slot);
         Ok(next)
     }
 
@@ -653,7 +904,7 @@ impl StagedSetup {
     /// than of the sequence of calls that produced it, so a future operation
     /// that forgets a rule cannot leak a bad setup past here.
     pub fn commit(&self) -> Result<CommitSpec, StageRefusal> {
-        let Some(device) = self.device.clone() else {
+        let Some(device) = self.device().cloned() else {
             return Err(StageRefusal::NoDevice {
                 slots: self.slots.len(),
             });
@@ -661,38 +912,75 @@ impl StagedSetup {
         if self.slots.is_empty() {
             return Err(StageRefusal::NoSlots);
         }
+        self.check_device_aliases()?;
         self.check_preset_names()?;
-
-        // The device as every slot will name it. `from_selector`, not
-        // `parse(&to_string())`: this is a value ksx is writing for the first
-        // time, so the canonical spelling IS the written one.
-        let keyboard =
-            crate::selector::DeviceRef::from_selector(device.selector.clone()).as_device_id();
 
         let mut slots = Vec::with_capacity(self.slots.len());
         for staged in &self.slots {
             check_pluggable(staged.persona)?;
+            if staged.routes.is_empty() {
+                return Err(StageRefusal::NoSources {
+                    number: staged.number,
+                });
+            }
             // A pad with no bindings plugs and does nothing. Both exits are
             // built from this value, so refusing here refuses SAVE and PLAY
             // with one rule — and `StagedSetupView::ready` reads this same
             // result, so the buttons are never offered for it in the first
             // place.
-            if staged.preset.binds_nothing() {
+            if staged.routes.len() == 1 && staged.routes[0].preset.binds_nothing() {
                 return Err(StageRefusal::NoBindings {
                     number: staged.number,
-                    preset: staged.preset.name.clone(),
+                    preset: staged.routes[0].preset.name.clone(),
                 });
             }
-            let spec = SlotSpec::new(
-                staged.number,
-                Some(keyboard.clone()),
-                None,
-                staged.preset.name.clone(),
-            )
-            .map_err(|err| StageRefusal::BadSlot { given: err.0 })?
-            .with_persona(staged.persona)
-            .with_socd(staged.socd);
-            slots.push(ResolvedSlot::new(spec, staged.preset.clone()));
+            if let Some(route) = staged
+                .routes
+                .iter()
+                .find(|route| route.preset.binds_nothing())
+            {
+                return Err(StageRefusal::NoRouteBindings {
+                    number: staged.number,
+                    selector: route.selector.to_string(),
+                    preset: route.preset.name.clone(),
+                });
+            }
+
+            let mut sources = Vec::with_capacity(staged.routes.len());
+            for route in &staged.routes {
+                let routed_device = self
+                    .devices
+                    .iter()
+                    .find(|device| device.selector == route.selector)
+                    .ok_or_else(|| StageRefusal::NoSuchDevice {
+                        selector: route.selector.to_string(),
+                    })?;
+                // `from_selector`, not `parse(&to_string())`: this is a value
+                // ksx is writing for the first time, so the canonical spelling
+                // IS the written one.
+                let keyboard =
+                    crate::selector::DeviceRef::from_selector(routed_device.selector.clone())
+                        .as_device_id();
+                sources.push(SourceSpec::keyboard(keyboard, route.preset.name.clone()));
+            }
+
+            let primary = staged.routes[0].preset.clone();
+            let spec = SlotSpec::from_sources(staged.number, sources, primary.name.clone())
+                .map_err(|err| StageRefusal::BadSlot { given: err.0 })?
+                .with_persona(staged.persona)
+                .with_socd(staged.socd);
+            let mut additional_presets = Vec::new();
+            for route in &staged.routes[1..] {
+                if !route.preset.name.eq_ignore_ascii_case(&primary.name)
+                    && !additional_presets
+                        .iter()
+                        .any(|preset: &Preset| preset.name.eq_ignore_ascii_case(&route.preset.name))
+                {
+                    additional_presets.push(route.preset.clone());
+                }
+            }
+            slots
+                .push(ResolvedSlot::new(spec, primary).with_additional_presets(additional_presets));
         }
         let xinput = self.xinput_slots();
         if xinput > usize::from(MAX_XINPUT_SLOTS) {
@@ -728,6 +1016,7 @@ impl StagedSetup {
         };
         Ok(CommitSpec {
             device,
+            devices: self.devices.clone(),
             slots,
             blocking,
         })
@@ -778,28 +1067,126 @@ impl StagedSetup {
         Ok(())
     }
 
-    /// One preset name is one preset file. Two staged slots may share a name
-    /// only when they share the bindings too.
-    fn check_preset_names(&self) -> Result<(), StageRefusal> {
-        for (i, slot) in self.slots.iter().enumerate() {
-            if slot.preset.name.trim().is_empty() {
-                return Err(StageRefusal::UnnamedPreset {
-                    number: slot.number,
-                });
-            }
-            for other in &self.slots[i + 1..] {
-                if other.preset.name.eq_ignore_ascii_case(&slot.preset.name)
-                    && other.preset != slot.preset
-                {
-                    return Err(StageRefusal::PresetNameClash {
-                        number: slot.number,
-                        other: other.number,
-                        name: slot.preset.name.clone(),
+    fn require_device(&self, selector: &DeviceSelector) -> Result<(), StageRefusal> {
+        if self
+            .devices
+            .iter()
+            .any(|device| &device.selector == selector)
+        {
+            return Ok(());
+        }
+        Err(StageRefusal::NoSuchDevice {
+            selector: selector.to_string(),
+        })
+    }
+
+    /// Alias resolution in `ksx-config` is exact and first-match. Two
+    /// different selectors with the same alias would therefore make one set
+    /// of committed routes silently target the other keyboard.
+    fn check_device_aliases(&self) -> Result<(), StageRefusal> {
+        for (index, device) in self.devices.iter().enumerate() {
+            for other in &self.devices[index + 1..] {
+                if device.alias == other.alias && device.selector != other.selector {
+                    return Err(StageRefusal::DuplicateAlias {
+                        alias: device.alias.clone(),
+                        selector: device.selector.to_string(),
+                        other: other.selector.to_string(),
                     });
                 }
             }
         }
         Ok(())
+    }
+
+    /// One preset name is one preset file. Two staged slots may share a name
+    /// only when they share the bindings too. The same rule spans every route:
+    /// a second keyboard's preset is still written to the same presets folder.
+    fn check_preset_names(&self) -> Result<(), StageRefusal> {
+        let routed: Vec<(u8, &Preset)> = self
+            .slots
+            .iter()
+            .flat_map(|slot| {
+                if slot.routes.is_empty() {
+                    vec![(slot.number, &slot.preset)]
+                } else {
+                    slot.routes
+                        .iter()
+                        .map(|route| (slot.number, &route.preset))
+                        .collect()
+                }
+            })
+            .collect();
+        for (index, (number, preset)) in routed.iter().enumerate() {
+            if preset.name.trim().is_empty() {
+                return Err(StageRefusal::UnnamedPreset { number: *number });
+            }
+            for (other_number, other) in &routed[index + 1..] {
+                if other.name.eq_ignore_ascii_case(&preset.name) && *other != *preset {
+                    return Err(StageRefusal::PresetNameClash {
+                        number: *number,
+                        other: *other_number,
+                        name: preset.name.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn normalize_device(device: StagedDevice) -> Result<StagedDevice, StageRefusal> {
+    let alias = device.alias.trim();
+    if alias.is_empty() {
+        return Err(StageRefusal::BadAlias {
+            alias: device.alias.clone(),
+            problem: "an alias is the short name a [[slot]] refers to, and an empty one \
+                      refers to nothing",
+        });
+    }
+    if alias.contains('\\') {
+        return Err(StageRefusal::BadAlias {
+            alias: device.alias.clone(),
+            problem: "a value containing a backslash is read as a literal device path \
+                      everywhere else in the config, so it could never resolve back to this \
+                      entry",
+        });
+    }
+    Ok(StagedDevice {
+        alias: alias.to_owned(),
+        ..device
+    })
+}
+
+fn sort_routes(devices: &[StagedDevice], slot: &mut StagedSlot) {
+    slot.routes.sort_by_key(|route| {
+        devices
+            .iter()
+            .position(|device| device.selector == route.selector)
+            .unwrap_or(usize::MAX)
+    });
+}
+
+/// Keep the public single-preset view aligned with the canonical first route.
+/// When the last route is removed, retain the previous value as the pending
+/// preset legacy callers expect to survive until another device is chosen.
+fn sync_compatibility_preset(slot: &mut StagedSlot) {
+    if let Some(route) = slot.routes.first() {
+        slot.preset = route.preset.clone();
+    }
+}
+
+fn staged_devices_description(devices: &[StagedDevice]) -> String {
+    match devices {
+        [] => "no keyboard is currently staged".to_owned(),
+        [device] => format!("'{}'", device.selector),
+        _ => format!(
+            "staged keyboards [{}]",
+            devices
+                .iter()
+                .map(|device| device.selector.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -835,8 +1222,10 @@ fn check_pluggable(persona: Persona) -> Result<(), StageRefusal> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device::{DeviceId, KeyEvent};
+    use crate::engine::Engine;
     use crate::key::Key;
-    use crate::pad::XButton;
+    use crate::pad::{XButton, XButtons};
     use crate::preset::Binding;
 
     fn device() -> StagedDevice {
@@ -848,15 +1237,37 @@ mod tests {
         }
     }
 
+    fn other_device() -> StagedDevice {
+        StagedDevice {
+            selector: DeviceSelector::parse("usb:046d:c31c:00").unwrap(),
+            alias: "desk".to_owned(),
+            label: "Logitech keyboard".to_owned(),
+            backend: StageCaptureBackend::Interception,
+        }
+    }
+
     fn preset(name: &str) -> Preset {
+        routed_preset(name, Key::A, XButton::A)
+    }
+
+    fn routed_preset(name: &str, key: Key, button: XButton) -> Preset {
         Preset {
             name: name.to_owned(),
-            entries: vec![(Key::A, Binding::Button(XButton::A))],
+            entries: vec![(key, Binding::Button(button))],
             chords: Vec::new(),
             macros: Default::default(),
             turbo: Vec::new(),
             toggle: Vec::new(),
             protected: false,
+        }
+    }
+
+    fn event(device: &DeviceId, key: Key, down: bool) -> KeyEvent {
+        KeyEvent {
+            device: device.clone(),
+            key,
+            down,
+            t: 0,
         }
     }
 
@@ -1355,6 +1766,287 @@ mod tests {
         assert_eq!(spec.slots[0].preset.entries.len(), 1);
     }
 
+    #[test]
+    fn two_keyboards_feed_one_controller_with_independent_presets() {
+        let left = device();
+        let right = other_device();
+        let left_map = routed_preset("left-side", Key::Q, XButton::A);
+        let right_map = routed_preset("right-side", Key::W, XButton::B);
+        let setup = StagedSetup::new()
+            .choose_device(left.clone())
+            .unwrap()
+            .add_device(right.clone())
+            .unwrap()
+            .add_slot(1, Persona::Xbox360, left_map.clone())
+            .unwrap()
+            .set_source_bindings(1, &right.selector, right_map.clone())
+            .unwrap()
+            .set_blocking(Blocking::BoundKeys);
+
+        assert_eq!(setup.devices(), [left.clone(), right.clone()]);
+        assert_eq!(setup.device(), Some(&left));
+        let routes = setup.slot(1).unwrap().routes();
+        assert_eq!(routes.len(), 2);
+        assert_eq!(routes[0].selector, left.selector);
+        assert_eq!(routes[0].preset, left_map);
+        assert_eq!(routes[1].selector, right.selector);
+        assert_eq!(routes[1].preset, right_map);
+
+        let committed = setup.commit().unwrap();
+        assert_eq!(committed.devices, [left, right]);
+        assert_eq!(committed.slots[0].spec.sources.len(), 2);
+        assert_eq!(committed.slots[0].spec.sources[0].preset, "left-side");
+        assert_eq!(committed.slots[0].spec.sources[1].preset, "right-side");
+        assert_eq!(committed.slots[0].preset.name, "left-side");
+        assert_eq!(committed.slots[0].additional_presets, [right_map]);
+    }
+
+    #[test]
+    fn two_keyboards_can_feed_two_different_controllers() {
+        let left = device();
+        let right = other_device();
+        let committed = StagedSetup::new()
+            .add_device(left.clone())
+            .unwrap()
+            .add_device(right.clone())
+            .unwrap()
+            .add_slot_for_source(
+                1,
+                Persona::Xbox360,
+                &left.selector,
+                routed_preset("Player 1", Key::A, XButton::A),
+            )
+            .unwrap()
+            .add_slot_for_source(
+                2,
+                Persona::PlayStation,
+                &right.selector,
+                routed_preset("Player 2", Key::B, XButton::B),
+            )
+            .unwrap()
+            .set_blocking(Blocking::Whole)
+            .commit()
+            .unwrap();
+
+        assert_eq!(committed.slots.len(), 2);
+        assert_eq!(committed.slots[0].spec.sources.len(), 1);
+        assert_eq!(
+            committed.slots[0].spec.sources[0].device.as_str(),
+            left.selector.to_string()
+        );
+        assert_eq!(committed.slots[1].spec.sources.len(), 1);
+        assert_eq!(
+            committed.slots[1].spec.sources[0].device.as_str(),
+            right.selector.to_string()
+        );
+    }
+
+    #[test]
+    fn removing_one_keyboard_removes_only_its_routes() {
+        let left = device();
+        let right = other_device();
+        let setup = StagedSetup::new()
+            .add_device(left.clone())
+            .unwrap()
+            .add_device(right.clone())
+            .unwrap()
+            .add_slot_for_source(1, Persona::Xbox360, &left.selector, preset("P1"))
+            .unwrap()
+            .add_slot_for_source(2, Persona::PlayStation, &right.selector, preset("P2"))
+            .unwrap()
+            .set_blocking(Blocking::Whole);
+
+        let removed = setup.remove_device(&left.selector).unwrap();
+        assert_eq!(removed.devices(), std::slice::from_ref(&right));
+        assert_eq!(removed.device(), Some(&right));
+        assert!(removed.slot(1).unwrap().routes().is_empty());
+        assert_eq!(removed.slot(1).unwrap().preset.name, "P1");
+        assert_eq!(removed.slot(2).unwrap().routes().len(), 1);
+        assert_eq!(
+            removed.slot(2).unwrap().routes()[0].selector,
+            right.selector
+        );
+        assert_eq!(
+            removed.commit().unwrap_err(),
+            StageRefusal::NoSources { number: 1 }
+        );
+
+        let surviving = removed.remove_slot(1).unwrap().commit().unwrap();
+        assert_eq!(surviving.slots.len(), 1);
+        assert_eq!(surviving.slots[0].spec.number, 2);
+        assert_eq!(surviving.slots[0].spec.sources[0].preset, "P2");
+    }
+
+    #[test]
+    fn upserting_the_same_selector_updates_in_place_without_losing_routes() {
+        let original = device();
+        let setup = staged();
+        let updated = StagedDevice {
+            alias: "renamed-panel".to_owned(),
+            label: "Updated panel label".to_owned(),
+            backend: StageCaptureBackend::Winusb,
+            ..original.clone()
+        };
+        let next = setup.upsert_device(updated.clone()).unwrap();
+
+        assert_eq!(next.devices(), std::slice::from_ref(&updated));
+        assert_eq!(next.device(), Some(&updated));
+        assert_eq!(next.slot(1).unwrap().routes().len(), 1);
+        assert_eq!(
+            next.slot(1).unwrap().routes()[0].selector,
+            original.selector
+        );
+        assert_eq!(next.slot(1).unwrap().preset.name, "Player 1");
+        assert_eq!(
+            next.set_blocking(Blocking::Whole).commit().unwrap().devices,
+            [updated]
+        );
+    }
+
+    #[test]
+    fn same_key_on_different_staged_sources_keeps_its_source_identity() {
+        let left = device();
+        let right = other_device();
+        let committed = StagedSetup::new()
+            .add_device(left)
+            .unwrap()
+            .add_device(right)
+            .unwrap()
+            .add_slot(
+                1,
+                Persona::Xbox360,
+                routed_preset("left", Key::Q, XButton::A),
+            )
+            .unwrap()
+            .set_source_bindings(
+                1,
+                &other_device().selector,
+                routed_preset("right", Key::Q, XButton::B),
+            )
+            .unwrap()
+            .set_blocking(Blocking::Whole)
+            .commit()
+            .unwrap();
+        let left_id = committed.slots[0].spec.sources[0].device.clone();
+        let right_id = committed.slots[0].spec.sources[1].device.clone();
+        let mut engine = Engine::new(committed.slots);
+
+        engine.handle(&event(&left_id, Key::Q, true));
+        assert_eq!(engine.pad_state(1).unwrap().buttons, XButtons::A);
+        engine.handle(&event(&right_id, Key::Q, true));
+        assert_eq!(
+            engine.pad_state(1).unwrap().buttons,
+            XButtons::A | XButtons::B
+        );
+        engine.handle(&event(&left_id, Key::Q, false));
+        assert_eq!(engine.pad_state(1).unwrap().buttons, XButtons::B);
+    }
+
+    #[test]
+    fn legacy_one_device_calls_commit_to_the_exact_previous_slot_shape() {
+        let staged_device = device();
+        let mapping = routed_preset("Legacy P1", Key::B, XButton::B);
+        let setup = StagedSetup::new()
+            .choose_device(staged_device.clone())
+            .unwrap()
+            .add_slot(1, Persona::Xbox360, preset("placeholder"))
+            .unwrap()
+            .set_bindings(1, mapping.clone())
+            .unwrap()
+            .set_socd(1, Socd::Neutral)
+            .unwrap()
+            .set_blocking(Blocking::Whole);
+
+        assert_eq!(setup.device(), Some(&staged_device));
+        assert_eq!(setup.devices(), std::slice::from_ref(&staged_device));
+        assert_eq!(setup.slot(1).unwrap().preset, mapping);
+        assert_eq!(setup.slot(1).unwrap().routes().len(), 1);
+
+        let keyboard = crate::selector::DeviceRef::from_selector(staged_device.selector.clone())
+            .as_device_id();
+        let expected_spec = SlotSpec::new(1, Some(keyboard), None, mapping.name.clone())
+            .unwrap()
+            .with_socd(Socd::Neutral);
+        let committed = setup.commit().unwrap();
+        assert_eq!(committed.device, staged_device.clone());
+        assert_eq!(committed.devices, [staged_device]);
+        assert_eq!(committed.slots, [ResolvedSlot::new(expected_spec, mapping)]);
+    }
+
+    #[test]
+    fn aliases_are_unique_by_the_config_resolvers_exact_case_semantics() {
+        let first = device();
+        let same_alias = StagedDevice {
+            alias: first.alias.clone(),
+            ..other_device()
+        };
+        let setup = StagedSetup::new().add_device(first).unwrap();
+        let refused = setup.add_device(same_alias).unwrap_err();
+        assert_eq!(refused.code(), "duplicate-alias");
+        assert!(refused.to_string().contains("panel"));
+        assert_eq!(setup.devices().len(), 1, "a refusal changes nothing");
+
+        let case_distinct = StagedDevice {
+            alias: "Panel".to_owned(),
+            ..other_device()
+        };
+        assert_eq!(
+            setup.add_device(case_distinct).unwrap().devices().len(),
+            2,
+            "config alias lookup is exact, not case-folded"
+        );
+    }
+
+    #[test]
+    fn routed_preset_names_deduplicate_equal_bodies_and_refuse_different_ones() {
+        let left = device();
+        let right = other_device();
+        let shared = routed_preset("shared", Key::Q, XButton::A);
+        let setup = StagedSetup::new()
+            .add_device(left)
+            .unwrap()
+            .add_device(right.clone())
+            .unwrap()
+            .add_slot(1, Persona::Xbox360, shared.clone())
+            .unwrap()
+            .set_source_bindings(1, &right.selector, shared.clone())
+            .unwrap()
+            .set_blocking(Blocking::Whole);
+        let deduplicated = setup.commit().unwrap();
+        assert_eq!(deduplicated.slots[0].spec.sources.len(), 2);
+        assert!(deduplicated.slots[0].additional_presets.is_empty());
+
+        let different = setup
+            .set_source_bindings(
+                1,
+                &right.selector,
+                routed_preset("shared", Key::Q, XButton::B),
+            )
+            .unwrap()
+            .commit()
+            .unwrap_err();
+        assert_eq!(different.code(), "preset-name-clash");
+    }
+
+    #[test]
+    fn an_inert_routed_source_is_refused_by_selector_and_preset() {
+        let right = other_device();
+        let mut inert = Preset::builtin_empty();
+        inert.name = "inert-right".to_owned();
+        let refused = staged()
+            .add_device(right.clone())
+            .unwrap()
+            .set_source_bindings(1, &right.selector, inert)
+            .unwrap()
+            .set_blocking(Blocking::Whole)
+            .commit()
+            .unwrap_err();
+        assert_eq!(refused.code(), "no-route-bindings");
+        let message = refused.to_string();
+        assert!(message.contains(&right.selector.to_string()), "{message}");
+        assert!(message.contains("inert-right"), "{message}");
+    }
+
     /// Committing an incomplete stage refuses in words that name the missing
     /// step, rather than saving a config that cannot run.
     #[test]
@@ -1546,6 +2238,27 @@ mod tests {
                 vec!["zzz-alias", "zzz-the-problem"],
             ),
             (
+                StageRefusal::DuplicateAlias {
+                    alias: "zzz-alias".into(),
+                    selector: "zzz-selector".into(),
+                    other: "zzz-other".into(),
+                },
+                vec!["zzz-alias", "zzz-selector", "zzz-other"],
+            ),
+            (
+                StageRefusal::NoSuchDevice {
+                    selector: "zzz-selector".into(),
+                },
+                vec!["zzz-selector"],
+            ),
+            (
+                StageRefusal::NoSuchRoute {
+                    number: 7,
+                    selector: "zzz-selector".into(),
+                },
+                vec!["7", "zzz-selector"],
+            ),
+            (
                 StageRefusal::PresetNameClash {
                     number: 7,
                     other: 2,
@@ -1570,6 +2283,15 @@ mod tests {
                 },
                 vec!["7", "zzz-preset"],
             ),
+            (
+                StageRefusal::NoRouteBindings {
+                    number: 7,
+                    selector: "zzz-selector".into(),
+                    preset: "zzz-preset".into(),
+                },
+                vec!["7", "zzz-selector", "zzz-preset"],
+            ),
+            (StageRefusal::NoSources { number: 7 }, vec!["7"]),
             // An unanswered question has to be ASKABLE from its own refusal, so
             // all three answers are named. Literals, not `Blocking::as_str()`:
             // the message is built from that function, so checking it against
@@ -1600,7 +2322,7 @@ mod tests {
         ];
 
         /// Keep in lockstep with `ordinal`'s last arm.
-        const REFUSAL_VARIANTS: usize = 17;
+        const REFUSAL_VARIANTS: usize = 22;
 
         // Exhaustive on purpose — no wildcard arm, ever. The ordinals mean
         // nothing except "this variant has a sample above".
@@ -1623,6 +2345,11 @@ mod tests {
                 StageRefusal::NoSlots => 14,
                 StageRefusal::DeviceChanged { .. } => 15,
                 StageRefusal::BadReorder { .. } => 16,
+                StageRefusal::DuplicateAlias { .. } => 17,
+                StageRefusal::NoSuchDevice { .. } => 18,
+                StageRefusal::NoSuchRoute { .. } => 19,
+                StageRefusal::NoRouteBindings { .. } => 20,
+                StageRefusal::NoSources { .. } => 21,
             }
         }
 

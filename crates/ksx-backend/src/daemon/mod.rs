@@ -2509,13 +2509,15 @@ mod tests {
     #[test]
     fn staged_play_replaces_a_running_session_in_one_control_loop_command() {
         let mut factory = FakeFactory::default();
+        let device = ksx_core::StagedDevice {
+            selector: ksx_core::DeviceSelector::parse("usb:d209:0430:00").unwrap(),
+            alias: "panel".to_owned(),
+            label: "Arcade panel".to_owned(),
+            backend: ksx_core::stage::StageCaptureBackend::Interception,
+        };
         let spec = ksx_core::CommitSpec {
-            device: ksx_core::StagedDevice {
-                selector: ksx_core::DeviceSelector::parse("usb:d209:0430:00").unwrap(),
-                alias: "panel".to_owned(),
-                label: "Arcade panel".to_owned(),
-                backend: ksx_core::stage::StageCaptureBackend::Interception,
-            },
+            device: device.clone(),
+            devices: vec![device],
             slots: tiny_plan(1, ksx_core::Persona::Xbox360).slots,
             blocking: ksx_core::Blocking::Off,
         };

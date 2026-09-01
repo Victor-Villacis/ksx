@@ -61,8 +61,8 @@ fn native_slots() -> Vec<ResolvedSlot> {
                 toggle: Vec::new(),
                 protected: false,
             };
-            ResolvedSlot {
-                spec: SlotSpec::new(
+            ResolvedSlot::new(
+                SlotSpec::new(
                     (index + 1) as u8,
                     Some(panel.clone()),
                     None,
@@ -70,7 +70,7 @@ fn native_slots() -> Vec<ResolvedSlot> {
                 )
                 .expect("valid synthetic slot"),
                 preset,
-            }
+            )
         })
         .collect()
 }

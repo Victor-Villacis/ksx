@@ -1561,6 +1561,11 @@ const CONFIG_SURFACES: &[ConfigSurface] = &[
         why: "",
     },
     ConfigSurface {
+        field: "source",
+        row: Some("Edit configuration"),
+        why: "",
+    },
+    ConfigSurface {
         field: "persona",
         row: Some("Edit configuration"),
         why: "",
@@ -1656,6 +1661,11 @@ fn the_config_surface_ledger_names_every_field_that_exists() {
         persona: ksx_core::Persona::PlayStation,
         socd: ksx_core::Socd::UpPriority,
         macros: ksx_core::MacroSwitch::On,
+        sources: vec![ksx_config::SourceEntry::new(
+            "second panel",
+            ksx_core::SourceKind::Keyboard,
+            "Player 3 alternate",
+        )],
     };
 
     // Serialize with everything non-default where it matters, so

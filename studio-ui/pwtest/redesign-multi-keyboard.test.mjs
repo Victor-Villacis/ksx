@@ -209,6 +209,8 @@ function projectManyToMany(payload, requestUrl, state) {
   payload.controllers.cards = [1, 2].map((slot) => ({
     ...baseCard,
     number: String(slot),
+    identity_key: `slot:${slot}:${baseCard.persona}`,
+    display_name: `Player ${slot} · ${baseCard.persona_label}`,
     preset: `multi-controller-p${slot}`,
   }));
   payload.controllers.pads = [1, 2].map((slot) => {
@@ -245,6 +247,11 @@ function projectManyToMany(payload, requestUrl, state) {
       sources,
     };
   });
+  for (const [index, card] of payload.controllers.cards.entries()) {
+    // Production's card-level preset is the first-route compatibility view.
+    // It deliberately changes when LEFT is removed; card identity must not.
+    card.preset = payload.controllers.pads[index].sources[0]?.preset ?? card.preset;
+  }
   payload.controllers.counts_line = "2 controllers · 2 exact keyboards";
 
   const selectedSlot = Number(requestUrl.searchParams.get("slot") ?? "1") === 2 ? 2 : 1;
@@ -420,6 +427,23 @@ async function controllerCalloutTexts(page, slot, functionName) {
     .map((node) => node.textContent?.trim() ?? ""), functionName);
 }
 
+async function controllerPresentation(page, slot) {
+  const id = `ctrl-slot-${slot}`;
+  const item = page.locator(`.forma-canvas-stage > [data-instance-id="${id}"]`);
+  const card = item.locator(".rd-ctrlcard");
+  const marker = page.locator(`.navigator-item[data-instance-id="${id}"]`);
+  return {
+    identity: await card.getAttribute("data-controller-identity"),
+    finishStoreKey: await card.getAttribute("data-finish-store-key"),
+    name: (await card.locator(".rd-ctrlcard-name").textContent())?.trim(),
+    widgetName: await item.getAttribute("data-widget-name"),
+    ariaLabel: await item.getAttribute("aria-label"),
+    moveLabel: await item.locator(".widget-drag-handle").getAttribute("aria-label"),
+    navigatorTitle: await marker.getAttribute("title"),
+    navigatorLabel: await marker.getAttribute("aria-label"),
+  };
+}
+
 describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
   test("the keyboard canvas is empty until Add and each exact source owns one full board", async () => {
     const scenario = await openScenario();
@@ -581,6 +605,7 @@ describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
       );
 
       await chooseAuthoringSource(page, LEFT);
+      const leftPresentation = await controllerPresentation(page, 1);
       const leftFunction = scenario.state.mappedFunctions[LEFT];
       const rightFunction = scenario.state.mappedFunctions[RIGHT];
       assert.notEqual(
@@ -607,6 +632,11 @@ describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
         "same-model source tabs expose their exact connection identities",
       );
       await chooseAuthoringSource(page, RIGHT);
+      assert.deepEqual(
+        await controllerPresentation(page, 1),
+        leftPresentation,
+        "authoring A↔B changes route inspection, never card/navigator/finish identity",
+      );
       assert.ok(
         (await controllerCalloutTexts(page, 1, rightFunction)).includes("A"),
         "switching authoring focus immediately repaints from RIGHT's nested route",
@@ -654,6 +684,17 @@ describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
     const { page, state, noise } = scenario;
     try {
       await addBothKeyboards(page, state);
+      const beforeRemoval = await controllerPresentation(page, 1);
+      assert.deepEqual(beforeRemoval, {
+        identity: "slot:1:xbox360",
+        finishStoreKey: "c:slot:1:xbox360",
+        name: "Player 1 · Xbox 360",
+        widgetName: "Player 1 · Xbox 360",
+        ariaLabel: "Player 1 · Xbox 360",
+        moveLabel: "Move Player 1 · Xbox 360",
+        navigatorTitle: "Player 1 · Xbox 360",
+        navigatorLabel: "Focus Player 1 · Xbox 360",
+      });
       await page.locator('[data-nx="rd-devs-open"]').click();
       const leftRow = page.locator(`.rd-devmodal button[data-selector="${LEFT}"]`);
 
@@ -686,6 +727,19 @@ describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
       assert.equal(state.removeBodies[0].get("confirm_remove"), "yes");
       assert.deepEqual([...state.staged], [RIGHT]);
       assert.equal(await keyboardNode(page, RIGHT_SLUG).count(), 1);
+      assert.deepEqual(
+        await controllerPresentation(page, 1),
+        beforeRemoval,
+        "removing the primary route cannot rename or repaint the virtual controller seat",
+      );
+      const afterRemoval = await page.evaluate(async () =>
+        (await fetch("/api/redesign?slot=1")).json()
+      );
+      assert.equal(
+        afterRemoval.controllers.cards[0].preset,
+        "multi-right-p1",
+        "the fixture proves primary compatibility metadata really changed",
+      );
       assert.equal(
         await page.evaluate((selector) => {
           const saved = JSON.parse(localStorage.getItem("ksx-redesign-canvas") ?? "{}");
@@ -710,6 +764,11 @@ describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
       );
       assert.equal(await keyboardNode(page, LEFT_SLUG).count(), 0);
       assert.equal(await keyboardNode(page, RIGHT_SLUG).count(), 1);
+      assert.deepEqual(
+        await controllerPresentation(page, 1),
+        beforeRemoval,
+        "seat identity and finish key survive a reload after primary-route removal",
+      );
       assert.deepEqual(noise, [], "confirmed exact-source removal stays browser-error free");
     } finally {
       await closeScenario(scenario);

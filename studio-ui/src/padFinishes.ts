@@ -24,8 +24,9 @@ import {
 // implementation. The historical localStorage keys remain intentionally: a
 // hard cutover must preserve a controller's chosen finish instead of silently
 // resetting presentation state. The daemon owns nothing here — a finish is
-// presentation chrome keyed to the controller's preset identity
-// (`padStoreKeys`' rule).
+// presentation chrome keyed to the redesign's source-neutral virtual-output
+// seat. Historical preset keys migrate once below, so the identity correction
+// does not erase an existing paint choice.
 
 const DS4_VARIANT_STORE = "ksx-nocturne-ds4-variants1";
 const DS4_VARIANT_SLUGS = new Set<string>(DS4_PREMIUM_VARIANTS.map((variant) => variant.slug));
@@ -194,6 +195,35 @@ export function applyPremiumControllerVariant(
   }
   if (persist) {
     controllerFinishes[controllerFinishKey(family, storeKey)] = variant.slug;
+    saveControllerFinishes();
+  }
+}
+
+/** Copy a historical preset-keyed finish to the stable controller-seat key.
+ * The destination always wins, making this idempotent across every payload
+ * refresh and preventing a later primary-route change from repainting a card.
+ */
+export function migrateControllerFinishIdentity(
+  family: string,
+  legacyStoreKey: string,
+  stableStoreKey: string,
+): void {
+  if (!legacyStoreKey || !stableStoreKey || legacyStoreKey === stableStoreKey) return;
+  if (family === "ps") {
+    if (ds4Variants[stableStoreKey] === undefined && ds4Variants[legacyStoreKey] !== undefined) {
+      ds4Variants[stableStoreKey] = ds4Variants[legacyStoreKey];
+      saveDs4Variants();
+    }
+    return;
+  }
+  const premiumFamily = premiumControllerConfig(family)
+    ? family as PremiumControllerFamily
+    : null;
+  if (!premiumFamily) return;
+  const legacyKey = controllerFinishKey(premiumFamily, legacyStoreKey);
+  const stableKey = controllerFinishKey(premiumFamily, stableStoreKey);
+  if (controllerFinishes[stableKey] === undefined && controllerFinishes[legacyKey] !== undefined) {
+    controllerFinishes[stableKey] = controllerFinishes[legacyKey];
     saveControllerFinishes();
   }
 }

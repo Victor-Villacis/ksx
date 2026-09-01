@@ -1525,6 +1525,20 @@ pub struct RedesignControllerCard {
     /// presentation routes on this, never on the label's words.
     pub persona: String,
     pub persona_label: String,
+    /// Source-neutral identity of the virtual output seat. Keyboard-route
+    /// presets are independent authoring documents and therefore cannot name
+    /// the controller card or its browser-kept finish. Moving a controller to
+    /// another player intentionally changes this key: the visible product
+    /// identity is the output seat (P1/P2), not an unpersisted draft UUID.
+    #[serde(default)]
+    pub identity_key: String,
+    /// The one source-neutral card/navigator headline. The exact selected
+    /// route preset remains in [`RedesignControllers::source_preset`] and the
+    /// inspector's `pad_sub`; it must never leak back into this label.
+    #[serde(default)]
+    pub display_name: String,
+    /// First-route compatibility data for older consumers. Redesign uses this
+    /// only as mutation/file metadata, never as controller presentation.
     pub preset: String,
     /// What this slot costs at Play, in one served sentence: an XInput
     /// persona occupies one of Windows' four XInput slots; a HID persona
@@ -1749,6 +1763,8 @@ impl RedesignControllers {
                     number: slot.number.to_string(),
                     persona: slot.persona.clone(),
                     persona_label: slot.persona_label.clone(),
+                    identity_key: format!("slot:{}:{}", slot.number, slot.persona),
+                    display_name: format!("Player {} · {}", slot.number, slot.persona_label),
                     preset: slot.preset.clone(),
                     api_line: if slot.is_xinput {
                         "XInput — takes one of Windows' four XInput slots at Play".to_owned()
@@ -7076,6 +7092,70 @@ mod tests {
         assert_eq!(pads[0].sources[1].source_id, right.selector);
         assert_eq!(pads[0].sources[0].fn_keys.get("A"), Some(&"G".to_owned()));
         assert_eq!(pads[0].sources[1].fn_keys.get("B"), Some(&"G".to_owned()));
+    }
+
+    #[test]
+    fn controller_card_identity_is_the_output_seat_not_a_keyboard_route() {
+        let left = staged_device("usb:1111:0001:00", "left", "Left keyboard");
+        let right = staged_device("usb:2222:0002:00", "right", "Right keyboard");
+        let left_route = staged_route(&left, "Left P1", "A", "G", "left-r1");
+        let right_route = staged_route(&right, "Right P1", "B", "G", "right-r1");
+        let both = staged_multi_source(
+            vec![left.clone(), right.clone()],
+            vec![staged_slot_with_sources(
+                1,
+                vec![left_route, right_route.clone()],
+            )],
+        );
+        let left_view =
+            RedesignControllers::of_source(&both, Some(1), Some(&left.selector), None, None, None);
+        let right_view =
+            RedesignControllers::of_source(&both, Some(1), Some(&right.selector), None, None, None);
+
+        assert_eq!(left_view.source_preset, "Left P1");
+        assert_eq!(right_view.source_preset, "Right P1");
+        assert!(left_view.panel.pad_sub.contains("Left P1"));
+        assert!(right_view.panel.pad_sub.contains("Right P1"));
+        assert_eq!(left_view.cards, right_view.cards);
+        let card = &left_view.cards[0];
+        assert_eq!(card.identity_key, "slot:1:xbox360");
+        assert_eq!(card.display_name, "Player 1 · Xbox 360");
+
+        // Removing the compatibility-first route changes slot.preset to the
+        // survivor but not the controller card or its finish identity.
+        let right_only = staged_multi_source(
+            vec![right.clone()],
+            vec![staged_slot_with_sources(1, vec![right_route.clone()])],
+        );
+        let survivor = RedesignControllers::of_source(
+            &right_only,
+            Some(1),
+            Some(&right.selector),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(survivor.cards[0].preset, "Right P1");
+        assert_eq!(survivor.cards[0].identity_key, card.identity_key);
+        assert_eq!(survivor.cards[0].display_name, card.display_name);
+
+        // A MoveSlot intentionally changes the product identity because the
+        // virtual output seat—not an unpersisted logical-card UUID—is what a
+        // player sees and what games address.
+        let moved = staged_multi_source(
+            vec![right.clone()],
+            vec![staged_slot_with_sources(2, vec![right_route])],
+        );
+        let moved_view = RedesignControllers::of_source(
+            &moved,
+            Some(2),
+            Some(&right.selector),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(moved_view.cards[0].identity_key, "slot:2:xbox360");
+        assert_eq!(moved_view.cards[0].display_name, "Player 2 · Xbox 360");
     }
 
     #[test]

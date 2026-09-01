@@ -271,7 +271,7 @@ describe("the controller workbench", () => {
     }
     assert.equal(
       (await page.locator(`${cardSel(1)} .rd-ctrlcard-name`).textContent())?.trim(),
-      "Player 1",
+      "Player 1 · Xbox 360",
     );
     assert.match(
       (await page.locator(`${cardSel(1)} .rd-ctrlcard-meta`).textContent()) ?? "",
@@ -451,16 +451,27 @@ describe("the controller workbench", () => {
         .then((t) => t?.trim());
     // "Make this Player 1": one select change, one whole-order write, the
     // daemon renumbers — the others bump DOWN in arrival order.
+    const beforeMove = await page
+      .locator(`${cardSel(1)} .rd-ctrlcard`)
+      .getAttribute("data-render-fingerprint");
     await page.selectOption(`${cardSel(3)} select.rd-ctrlplayer`, "1");
     await page.waitForFunction(
-      (sel) =>
-        document.querySelector(`${sel} .rd-ctrlcard-name`)?.textContent?.trim() ===
-          "Player 3",
-      cardSel(1),
+      ({ sel, before }) =>
+        document.querySelector(`${sel} .rd-ctrlcard`)?.getAttribute("data-render-fingerprint") !==
+          before,
+      { sel: cardSel(1), before: beforeMove },
       { timeout: 10_000 },
     );
-    assert.equal(await nameAt(2), "Player 1", "the old P1 bumped down");
-    assert.equal(await nameAt(3), "Player 2");
+    const moved = await api();
+    assert.equal(moved.controllers.cards[0].preset, "Player 3", "the chosen card moved to P1");
+    for (const card of moved.controllers.cards) {
+      assert.equal(
+        await nameAt(card.number),
+        card.display_name,
+        "a MoveSlot changes the visible output-seat identity, not to a route preset",
+      );
+      assert.equal(card.identity_key, `slot:${card.number}:${card.persona}`);
+    }
 
     // "No player": the card parks as a ghost and the survivors move UP.
     await page.selectOption(`${cardSel(1)} select.rd-ctrlplayer`, "");
@@ -474,8 +485,10 @@ describe("the controller workbench", () => {
       null,
       { timeout: 10_000 },
     );
-    assert.equal(await nameAt(1), "Player 1", "the survivors compacted up");
-    assert.equal(await nameAt(2), "Player 2");
+    const compacted = await api();
+    for (const card of compacted.controllers.cards) {
+      assert.equal(await nameAt(card.number), card.display_name, "survivors adopt compacted seats");
+    }
     const ghost = '.forma-canvas-stage [data-instance-id^="ctrl-parked-"]';
     assert.equal(
       (await page.locator(`${ghost} .rd-ctrlcard-noplayer`).textContent())?.trim(),
@@ -506,9 +519,9 @@ describe("the controller workbench", () => {
         document.querySelectorAll(
           '.forma-canvas-stage [data-instance-id^="ctrl-parked-"]',
         ).length === 0 &&
-        document
-          .querySelector('.forma-canvas-stage [data-instance-id="ctrl-slot-1"] .rd-ctrlcard-name')
-          ?.textContent?.trim() === "Player 3",
+        fetch("/api/redesign")
+          .then((response) => response.json())
+          .then((payload) => payload.controllers.cards[0]?.preset === "Player 3"),
       null,
       { timeout: 15_000 },
     );
@@ -519,8 +532,15 @@ describe("the controller workbench", () => {
       "xbox360",
       "the re-slotted controller sits at Player 1",
     );
-    assert.equal(await nameAt(2), "Player 1", "bumped down by the re-slot");
-    assert.equal(await nameAt(3), "Player 2");
+    const reslotted = await api();
+    for (const card of reslotted.controllers.cards) {
+      await page.waitForFunction(
+        ({ selector, name }) =>
+          document.querySelector(`${selector} .rd-ctrlcard-name`)?.textContent?.trim() === name,
+        { selector: cardSel(card.number), name: card.display_name },
+        { timeout: 10_000 },
+      );
+    }
 
     // ✕ deletes outright: the space fills up by arrival order.
     await revealCanvasItem(page, "ctrl-slot-1");
@@ -532,8 +552,10 @@ describe("the controller workbench", () => {
       null,
       { timeout: 10_000 },
     );
-    assert.equal(await nameAt(1), "Player 1");
-    assert.equal(await nameAt(2), "Player 2");
+    const afterDelete = await api();
+    for (const card of afterDelete.controllers.cards) {
+      assert.equal(await nameAt(card.number), card.display_name);
+    }
 
     // A ghost's ✕ discards the ghost alone — browser state, no daemon write.
     await page.selectOption(`${cardSel(2)} select.rd-ctrlplayer`, "");

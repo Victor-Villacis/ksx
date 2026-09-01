@@ -24,6 +24,7 @@ import {
   applyPremiumControllerVariant,
   controllerFinishFor,
   ds4VariantFor,
+  migrateControllerFinishIdentity,
   premiumControllerConfig,
   type PremiumControllerFamily,
 } from "./padFinishes";
@@ -110,6 +111,12 @@ export interface RdControllerCardView {
   number: string;
   persona: string;
   persona_label: string;
+  /** Source-neutral virtual-output seat identity. Older payloads omit it;
+   * the fallback is the same slot/persona contract. */
+  identity_key?: string;
+  /** Served card/navigator headline. Never a keyboard-route preset. */
+  display_name?: string;
+  /** First-route compatibility metadata; inspector route rows own display. */
   preset: string;
   api_line: string;
   /** The presentation family from the server's ONE total record — never
@@ -128,6 +135,8 @@ export interface ParkedController {
   persona: string;
   persona_label: string;
   preset: string;
+  /** Captured seat identity keeps the finish while the card is parked. */
+  identity_key?: string;
   /** The served presentation captured at park time, so the ghost keeps the
    *  real body drawing. Older stored entries may lack them — an empty
    *  family draws the named placeholder. */
@@ -190,6 +199,19 @@ const ORPHAN_TITLE =
   "No player parks this controller off the draft — the others move up. The " +
   "studio keeps its bindings, and re-slotting brings them back.";
 
+function controllerIdentity(card: RdControllerCardView): string {
+  return card.identity_key?.trim() || `slot:${card.number}:${card.persona}`;
+}
+
+function controllerDisplayName(card: RdControllerCardView): string {
+  return card.display_name?.trim() ||
+    `Player ${card.number} · ${card.persona_label || PERSONA_BADGE_FALLBACK}`;
+}
+
+function parkedDisplayName(parked: ParkedController): string {
+  return `No player · ${parked.persona_label || PERSONA_BADGE_FALLBACK}`;
+}
+
 function playerSelect(
   positions: number,
   current: number | null,
@@ -217,7 +239,7 @@ function playerSelect(
 function badgeAndName(
   persona: string,
   personaLabel: string,
-  preset: string,
+  displayName: string,
 ): HTMLElement[] {
   const badge = document.createElement("p");
   badge.className = "rd-ctrlcard-badge";
@@ -225,7 +247,7 @@ function badgeAndName(
   badge.textContent = personaLabel || PERSONA_BADGE_FALLBACK;
   const name = document.createElement("p");
   name.className = "rd-ctrlcard-name";
-  name.textContent = preset;
+  name.textContent = displayName;
   return [badge, name];
 }
 
@@ -250,17 +272,32 @@ function calloutText(chip: string): string {
   return text;
 }
 
-/** A widget's durable identity for the FINISH stores: the controller is its
- *  PRESET (nocturne's `padStoreKeys` rule — twin seats on one preset get
- *  #2/#3… suffixes in slot order, or both twins fight over one saved
- *  finish). */
-function finishStoreKeys(cards: readonly RdControllerCardView[]): Map<string, string> {
+/** Historical preset keys, read once only to migrate an existing finish. */
+function legacyFinishStoreKeys(cards: readonly RdControllerCardView[]): Map<string, string> {
   const seen = new Map<string, number>();
   const keys = new Map<string, string>();
   for (const card of cards) {
     const n = (seen.get(card.preset) ?? 0) + 1;
     seen.set(card.preset, n);
     keys.set(card.number, "p:" + card.preset + (n > 1 ? "#" + n : ""));
+  }
+  return keys;
+}
+
+/** Finish identity belongs to the virtual output seat, never to one of its
+ * keyboard-route preset files. A MoveSlot intentionally changes the seat and
+ * therefore this key; switching/removing input routes does not. */
+function finishStoreKeys(cards: readonly RdControllerCardView[]): Map<string, string> {
+  const legacy = legacyFinishStoreKeys(cards);
+  const keys = new Map<string, string>();
+  for (const card of cards) {
+    const stable = `c:${controllerIdentity(card)}`;
+    migrateControllerFinishIdentity(
+      card.family,
+      legacy.get(card.number) ?? "",
+      stable,
+    );
+    keys.set(card.number, stable);
   }
   return keys;
 }
@@ -552,7 +589,7 @@ function removeForm(number: string): HTMLElement {
   return form;
 }
 
-/** A LIVE card: slot chip, persona, preset, the api line, and the verbs —
+/** A LIVE card: slot chip, persona, source-neutral seat name, api line, and verbs —
  *  the Player select (direct assignment; "No player" parks) plus remove. */
 function liveCardContent(
   card: RdControllerCardView,
@@ -564,6 +601,8 @@ function liveCardContent(
   const body = document.createElement("div");
   body.className = "rd-ctrlcard";
   body.dataset.renderFingerprint = liveCardFingerprint(card, allNumbers, pad, storeKey);
+  body.dataset.controllerIdentity = controllerIdentity(card);
+  body.dataset.finishStoreKey = storeKey;
   // The ramp digit — every surface speaking for this slot wears np{n}
   // (the shared sheet's per-player tint vocabulary).
   body.classList.add(`np${card.number}`);
@@ -632,6 +671,7 @@ function liveCardContent(
         persona: card.persona,
         persona_label: card.persona_label,
         preset: card.preset,
+        identity_key: controllerIdentity(card),
         family: card.family,
         art: card.art,
       });
@@ -653,7 +693,10 @@ function liveCardContent(
     pad?.controls,
     storeKey,
   );
-  const head = [slot, ...badgeAndName(card.persona, card.persona_label, card.preset)];
+  const head = [
+    slot,
+    ...badgeAndName(card.persona, card.persona_label, controllerDisplayName(card)),
+  ];
   if (swatches) head.push(swatches);
   body.append(...head, art);
   // The provider's own refusal, when the mapper table could not be read —
@@ -739,16 +782,25 @@ function ghostCardContent(
   verbs.append(select, assignForm, discard);
   body.dataset.family = parked.family || "unknown";
   // A ghost's slot left the daemon, so its clone wears no callouts; the
-  // finish still follows its preset identity.
+  // finish keeps the seat identity it had when parked. Re-slotting at a new
+  // player deliberately adopts that destination seat's identity.
+  const parkedStoreKey = parked.identity_key?.trim()
+    ? `c:${parked.identity_key.trim()}`
+    : `p:${parked.preset}`;
+  body.dataset.controllerIdentity = parked.identity_key?.trim() ?? "";
+  body.dataset.finishStoreKey = parkedStoreKey;
   const { art, swatches } = padBody(
     io,
     parked.family || "unknown",
     parked.persona_label,
     null,
     undefined,
-    "p:" + parked.preset,
+    parkedStoreKey,
   );
-  const head = [slot, ...badgeAndName(parked.persona, parked.persona_label, parked.preset)];
+  const head = [
+    slot,
+    ...badgeAndName(parked.persona, parked.persona_label, parkedDisplayName(parked)),
+  ];
   if (swatches) head.push(swatches);
   body.append(...head, art, meta, verbs);
   return body;
@@ -795,6 +847,30 @@ function mountCard(
   );
 }
 
+/** `createCanvasItem` seeds accessible/navigator names only at mount. Cards
+ * keyed by a seat survive payload refreshes, so reconcile must update every
+ * copy when a MoveSlot changes which persona occupies that seat. */
+function syncMountedCardName(
+  io: ControllerBenchIo,
+  item: HTMLElement,
+  displayName: string,
+): void {
+  item.dataset.widgetName = displayName;
+  item.setAttribute("aria-label", displayName);
+  item.querySelector<HTMLElement>(".widget-drag-handle")?.setAttribute(
+    "aria-label",
+    `Move ${displayName}`,
+  );
+  const id = item.dataset.instanceId ?? "";
+  const marker = id
+    ? io.root.querySelector<HTMLElement>(
+      `.navigator-item[data-instance-id="${CSS.escape(id)}"]`,
+    )
+    : null;
+  marker?.setAttribute("aria-label", `Focus ${displayName}`);
+  if (marker) marker.title = displayName;
+}
+
 /** Reconcile the canvas to the served card list AND the parked ghosts:
  *  mount what the daemon staged (keyed by slot number — the daemon
  *  renumbers on reorder, so a renumbered slot re-mounts and follows the
@@ -818,7 +894,7 @@ export function syncControllerWidgets(
       allNumbers,
       io,
       padBySlot.get(card.number),
-      storeKeys.get(card.number) ?? "p:" + card.preset,
+      storeKeys.get(card.number) ?? `c:${controllerIdentity(card)}`,
     );
   const wantedLive = new Map(
     cards.map((card) => [controllerInstanceId(card.number), card]),
@@ -837,9 +913,10 @@ export function syncControllerWidgets(
     const live = wantedLive.get(id);
     const ghost = wantedGhosts.get(id);
     if (live) {
+      syncMountedCardName(io, item, controllerDisplayName(live));
       const current = item.querySelector<HTMLElement>(".rd-ctrlcard");
       const pad = padBySlot.get(live.number);
-      const storeKey = storeKeys.get(live.number) ?? "p:" + live.preset;
+      const storeKey = storeKeys.get(live.number) ?? `c:${controllerIdentity(live)}`;
       const fingerprint = liveCardFingerprint(live, allNumbers, pad, storeKey);
       if (current?.dataset.renderFingerprint !== fingerprint) {
         const focusSelector = current ? cardFocusSelector(current) : null;
@@ -849,6 +926,7 @@ export function syncControllerWidgets(
       }
       wantedLive.delete(id);
     } else if (ghost) {
+      syncMountedCardName(io, item, parkedDisplayName(ghost));
       const current = item.querySelector<HTMLElement>(".rd-ctrlcard");
       const fingerprint = ghostCardFingerprint(ghost, cards.length, io);
       if (current?.dataset.renderFingerprint !== fingerprint) {
@@ -868,7 +946,7 @@ export function syncControllerWidgets(
     mountCard(
       io,
       id,
-      `Slot ${card.number} — ${card.preset}`,
+      controllerDisplayName(card),
       dress(card),
       "",
       index,
@@ -880,7 +958,7 @@ export function syncControllerWidgets(
     mountCard(
       io,
       id,
-      `No player — ${entry.preset}`,
+      parkedDisplayName(entry),
       ghostCardContent(entry, cards.length, io),
       "rd-ctrl-ghost",
       index,

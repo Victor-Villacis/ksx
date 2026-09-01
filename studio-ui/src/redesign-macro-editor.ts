@@ -91,7 +91,14 @@ export interface RdMacView {
   open: boolean;
   name: string;
   slot: string;
+  /** Compatibility worksheet label. Source-owned writes use source_preset. */
   preset: string;
+  /** Exact physical keyboard route whose macro table is open. */
+  source?: string;
+  /** Opaque revision for that source-to-controller route. */
+  source_revision?: string;
+  /** Worksheet owned by that exact route. */
+  source_preset?: string;
   head: string;
   trigger: string;
   note: string;
@@ -133,6 +140,86 @@ export interface MacroDraftTable {
   gap_ms: number | null;
   triggers: string[];
   disabled: boolean;
+}
+
+export interface RdMacroSourceAuthority {
+  source: string;
+  revision: string;
+  preset: string;
+}
+
+export interface RdMacroEditPayload {
+  slot: number;
+  source: string;
+  expected_target_revision: string;
+  act: string;
+  draft: MacroDraftTable;
+}
+
+export interface RdMacroSavePayload {
+  target: "stage";
+  slot: number;
+  expected_device: string;
+  expected_target_revision: string;
+  preset: string;
+  name: string;
+  steps: MacroDraftStep[];
+  on_release: string;
+  retrigger: string;
+  interrupt: string;
+  repeat: string;
+  turbo_hz: number | null;
+  gap_ms: number | null;
+  enabled: boolean;
+}
+
+/** Exact source authority served with the open dialog. An incomplete legacy
+ * projection cannot authorize a redesign write, so callers fail closed. */
+export function rdMacroSourceAuthority(v: RdMacView): RdMacroSourceAuthority | null {
+  const source = v.source?.trim() ?? "";
+  const revision = v.source_revision?.trim() ?? "";
+  const preset = v.source_preset?.trim() ?? "";
+  return source && revision && preset ? { source, revision, preset } : null;
+}
+
+export function rdMacroEditPayload(
+  v: RdMacView,
+  draft: MacroDraftTable,
+  act: string,
+): RdMacroEditPayload | null {
+  const authority = rdMacroSourceAuthority(v);
+  if (!authority) return null;
+  return {
+    slot: Number(v.slot) || 0,
+    source: authority.source,
+    expected_target_revision: authority.revision,
+    act,
+    draft,
+  };
+}
+
+export function rdMacroSavePayload(
+  v: RdMacView,
+  draft: MacroDraftTable,
+): RdMacroSavePayload | null {
+  const authority = rdMacroSourceAuthority(v);
+  if (!authority) return null;
+  return {
+    target: "stage",
+    slot: Number(v.slot) || 0,
+    expected_device: authority.source,
+    expected_target_revision: authority.revision,
+    preset: authority.preset,
+    name: draft.name,
+    steps: draft.steps,
+    on_release: draft.on_release,
+    retrigger: draft.retrigger,
+    interrupt: draft.interrupt,
+    repeat: draft.repeat,
+    turbo_hz: draft.turbo_hz,
+    gap_ms: draft.gap_ms,
+    enabled: !draft.disabled,
+  };
 }
 
 export interface MacHost {
@@ -180,6 +267,7 @@ interface MacroReturnTarget {
   element: HTMLElement | null;
   name: string;
   slot: string;
+  source: string;
 }
 
 let macWiredRoot: HTMLElement | null = null;
@@ -210,6 +298,7 @@ function rememberMacroOpener(anchor: HTMLAnchorElement): void {
     element: anchor,
     name: url.searchParams.get("macro") ?? "",
     slot: url.searchParams.get("slot") ?? "",
+    source: url.searchParams.get("source") ?? "",
   };
 }
 
@@ -294,8 +383,10 @@ function focusDoorForView(root: HTMLElement, v: RdMacView): HTMLElement | null {
       const url = new URL(anchor.href, window.location.origin);
       const name = macReturnTarget?.name || v.name;
       const slot = macReturnTarget?.slot || v.slot;
+      const source = macReturnTarget?.source || v.source?.trim() || "";
       return url.pathname === "/redesign" && url.searchParams.get("macro") === name &&
-        (!slot || url.searchParams.get("slot") === slot);
+        (!slot || url.searchParams.get("slot") === slot) &&
+        (!source || url.searchParams.get("source") === source);
     } catch {
       return false;
     }
@@ -386,6 +477,15 @@ function macDirtyMark(): void {
 /** One act, applied by the server, answered with the whole roll. */
 async function macAct(act: string): Promise<void> {
   if (!macDraft || macBusy || !macView) return;
+  const payload = rdMacroEditPayload(macView, macDraft, act);
+  const authority = rdMacroSourceAuthority(macView);
+  if (!payload || !authority) {
+    macSay(
+      "This macro is no longer attached to an exact keyboard route. Refresh the canvas and try again.",
+      "err",
+    );
+    return;
+  }
   macBusy = true;
   macInFlight = new Promise<void>((resolve) => {
     macInFlightDone = resolve;
@@ -397,7 +497,7 @@ async function macAct(act: string): Promise<void> {
     const res = await fetch("/redesign/api/macro/edit", {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ slot: Number(macView.slot) || 0, act, draft: macDraft }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error(String(res.status));
     const out = (await res.json()) as {
@@ -425,7 +525,16 @@ async function macAct(act: string): Promise<void> {
     macSaveLabel = "Save this macro";
     macSayText = "";
     macSayKind = "";
-    applyView(out.view, true);
+    // Draft edits do not change staged authority. The edit renderer is shared
+    // with legacy and may omit these redesign-only fields, so never let its
+    // response erase or switch the exact route that will own Save.
+    applyView({
+      ...out.view,
+      source: authority.source,
+      source_revision: authority.revision,
+      source_preset: authority.preset,
+      preset: authority.preset,
+    }, true);
     macDirtyMark();
     if (out.said) macSay(out.said, "");
     if (keepRow !== null) {
@@ -465,29 +574,23 @@ async function macSave(): Promise<void> {
     );
     return;
   }
+  const payload = rdMacroSavePayload(macView, macDraft);
+  if (!payload) {
+    macSay(
+      "This macro is no longer attached to an exact keyboard route. Refresh the canvas and try again.",
+      "err",
+    );
+    return;
+  }
   macBusy = true;
   try {
     const res = await fetch("/api/macro/save", {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({
-        target: "stage",
-        slot: Number(macView.slot) || 0,
-        preset: macView.preset,
-        name: macDraft.name,
-        steps: macDraft.steps,
-        on_release: macDraft.on_release,
-        retrigger: macDraft.retrigger,
-        interrupt: macDraft.interrupt,
-        repeat: macDraft.repeat,
-        turbo_hz: macDraft.turbo_hz,
-        gap_ms: macDraft.gap_ms,
-        // ⚠️ THE WHOLE TABLE MEANS THE WHOLE TABLE (nocturne's scar):
-        // omitting this rewrote a DISABLED macro with the default, so
-        // editing one duration on a macro you had switched off started it
-        // firing again.
-        enabled: !macDraft.disabled,
-      }),
+      // ⚠️ THE WHOLE TABLE MEANS THE WHOLE TABLE (nocturne's scar):
+      // the payload includes enabled, so editing one duration on a disabled
+      // macro never starts it firing again.
+      body: JSON.stringify(payload),
     });
     const out = (await res.json()) as { ok: boolean; error?: string; problems?: string[] };
     if (out.ok) {
@@ -756,7 +859,7 @@ function adoptServedDialog(v: RdMacView): boolean {
 
   holder.className = `rd-macdlg ${v.back_cls}`;
   macDialogWasOpen = true;
-  macDialogIdentity = `${v.slot}\u0000${v.name}`;
+  macDialogIdentity = `${v.source?.trim() ?? ""}\u0000${v.slot}\u0000${v.name}`;
   macGridFocusCell =
     dlg.querySelector<HTMLElement>('[data-maccell][tabindex="0"]')?.dataset.maccell ??
     dlg.querySelector<HTMLElement>("[data-maccell]")?.dataset.maccell ??
@@ -776,7 +879,7 @@ function renderDialog(v: RdMacView): void {
   const dlg = holder.querySelector<HTMLElement>(".nd-mac");
   if (!dlg) return;
   const wasOpen = macDialogWasOpen;
-  const identity = `${v.slot}\u0000${v.name}`;
+  const identity = `${v.source?.trim() ?? ""}\u0000${v.slot}\u0000${v.name}`;
   const changedDialog = identity !== macDialogIdentity;
   const active = document.activeElement;
   const activeBookmark = active instanceof Element && dlg.contains(active)
@@ -800,7 +903,12 @@ function renderDialog(v: RdMacView): void {
   if (opening) {
     if (!macReturnTarget && active instanceof HTMLElement && active !== document.body &&
       !holder.contains(active)) {
-      macReturnTarget = { element: active, name: v.name, slot: v.slot };
+      macReturnTarget = {
+        element: active,
+        name: v.name,
+        slot: v.slot,
+        source: v.source?.trim() ?? "",
+      };
     }
     macGridFocusCell = null;
     macFocusBookmark = null;

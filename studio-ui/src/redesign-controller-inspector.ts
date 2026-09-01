@@ -47,6 +47,12 @@ export interface RdOptionView {
 /** The whole panel — `ControllerPanel` on the wire (snapshot.rs), the same
  *  struct `/nocturne`'s right pane destructures. */
 export interface RdPanelView {
+  /** Exact physical source whose mapping rows this projection contains. */
+  source?: string;
+  /** Opaque revision for that source-to-controller route. */
+  source_revision?: string;
+  /** Preset owned by that exact route. */
+  source_preset?: string;
   slot_val: string;
   pad_badge: string;
   pad_badge_cls: string;
@@ -99,6 +105,12 @@ export interface RdKeyRowView {
 /** The Keys tab — `KeyPanel` on the wire, the same struct `/nocturne`'s
  *  By-key view serves (over this page's standard board). */
 export interface RdKeyPanelView {
+  /** Exact physical source whose by-key rows this projection contains. */
+  source?: string;
+  /** Opaque revision for that source-to-controller route. */
+  source_revision?: string;
+  /** Preset owned by that exact route. */
+  source_preset?: string;
   key_rows: RdKeyRowView[];
   keys_note: string;
   avail_main: RdKeyRowView[];
@@ -115,6 +127,46 @@ export interface RdKeyPanelView {
 /** Which of the pane's two READINGS is showing — by control (game side) or
  *  by key (hand side). Same facts, opposite subject (the 4460 tab pair). */
 export type InspectorTab = "controls" | "keys";
+
+export interface RdSourceAuthorityView {
+  source?: string;
+  source_revision?: string;
+  source_preset?: string;
+}
+
+/** Fields every source-owned form returns unchanged. Keeping this one helper
+ * prevents a clear/toggle/turbo/macro button from falling back to the
+ * compatibility route merely because its visible row contains no identity. */
+export function redesignSourceAuthorityFields(
+  authority: RdSourceAuthorityView,
+): [string, string][] {
+  return [
+    ["source", authority.source?.trim() ?? ""],
+    ["expected_target_revision", authority.source_revision?.trim() ?? ""],
+  ];
+}
+
+function sourceAuthority(
+  exact: RdSourceAuthorityView,
+  fallback?: RdSourceAuthorityView,
+): RdSourceAuthorityView {
+  const exactSource = exact.source?.trim() ?? "";
+  if (exactSource) {
+    return {
+      source: exactSource,
+      // Never combine one row's selector with another projection's
+      // revision. An incomplete exact row must reach the server incomplete
+      // and be refused, not acquire authority by accident.
+      source_revision: exact.source_revision?.trim() ?? "",
+      source_preset: exact.source_preset?.trim() ?? "",
+    };
+  }
+  return {
+    source: fallback?.source?.trim() ?? "",
+    source_revision: fallback?.source_revision?.trim() ?? "",
+    source_preset: fallback?.source_preset?.trim() ?? "",
+  };
+}
 
 /** A LIVE chip: a real button wearing the mapper's data-nx verb — the
  *  island's dispatch arms the learn/assign flow from it. */
@@ -221,7 +273,11 @@ function inlineForm(action: string, kind: string, fields: [string, string][]): H
 
 
 /** One bind row — nocturne's `details.n-bind` shape, class-for-class. */
-function bindRow(r: RdBindRowView, keyLabels: ReadonlyMap<string, string>): HTMLElement {
+function bindRow(
+  r: RdBindRowView,
+  keyLabels: ReadonlyMap<string, string>,
+  authority: RdSourceAuthorityView,
+): HTMLElement {
   const row = document.createElement("details");
   row.className = r.cls;
   row.dataset.fn = r.function;
@@ -251,6 +307,7 @@ function bindRow(r: RdBindRowView, keyLabels: ReadonlyMap<string, string>): HTML
   const clear = inlineForm("/redesign/bind/clear", "bind-clear", [
     ["slot", r.slot],
     ["function", r.function],
+    ...redesignSourceAuthorityFields(authority),
   ]);
   const clearBtn = el("button", r.clear_cls);
   clearBtn.type = "submit";
@@ -280,6 +337,7 @@ function bindRow(r: RdBindRowView, keyLabels: ReadonlyMap<string, string>): HTML
       ["slot", r.slot],
       ["function", r.function],
       ["mode", mode],
+      ...redesignSourceAuthorityFields(authority),
     ]);
     const button = el("button", cls, label);
     button.type = "submit";
@@ -302,6 +360,7 @@ function bindRow(r: RdBindRowView, keyLabels: ReadonlyMap<string, string>): HTML
       ["slot", r.slot],
       ["function", r.function],
       ["turbo_hz", hz],
+      ...redesignSourceAuthorityFields(authority),
     ]);
     const button = el("button", "n-tpre", label);
     button.type = "submit";
@@ -312,6 +371,7 @@ function bindRow(r: RdBindRowView, keyLabels: ReadonlyMap<string, string>): HTML
   const custom = inlineForm("/redesign/bind/turbo", "bind-turbo", [
     ["slot", r.slot],
     ["function", r.function],
+    ...redesignSourceAuthorityFields(authority),
   ]);
   custom.classList.add("n-turbo-form");
   const rate = document.createElement("input");
@@ -340,12 +400,13 @@ function bindGroup(
   rows: RdBindRowView[],
   chips: RdCtlChipView[],
   keyLabels: ReadonlyMap<string, string>,
+  authority: RdSourceAuthorityView,
 ): HTMLElement {
   const section = el("section", cls);
   const head = el("div", "n-bindg-head");
   head.append(el("span", "n-bindg-lab", label), el("span", "n-bindg-n", count));
   section.append(head);
-  for (const row of rows) section.append(bindRow(row, keyLabels));
+  for (const row of rows) section.append(bindRow(row, keyLabels, authority));
   const strip = el("div", "n-ctlstrip");
   for (const chip of chips) {
     const free = liveChip(
@@ -365,7 +426,11 @@ function bindGroup(
  *  The ✕ clear is a REAL form twin (the re-homed /redesign/key/clear); the
  *  jump button opens the same functions in the Controls tab; +/− are the
  *  learn flow and wait for the keyboard migration. */
-function keyRow(r: RdKeyRowView, onJump: (fns: string) => void): HTMLElement {
+function keyRow(
+  r: RdKeyRowView,
+  onJump: (fns: string) => void,
+  authority: RdSourceAuthorityView,
+): HTMLElement {
   const row = el("div", r.cls);
   row.dataset.key = r.key;
   row.dataset.fns = r.fns;
@@ -396,6 +461,7 @@ function keyRow(r: RdKeyRowView, onJump: (fns: string) => void): HTMLElement {
   const clear = inlineForm("/redesign/key/clear", "key-clear", [
     ["number", r.slot],
     ["key", r.key],
+    ...redesignSourceAuthorityFields(authority),
   ]);
   const clearBtn = el("button", "n-krow-clear");
   clearBtn.type = "submit";
@@ -440,7 +506,7 @@ function renderKeysView(keys: RdKeyPanelView, onJump: (fns: string) => void): HT
     ),
     el("p", "n-foot", keys.keys_note),
   );
-  for (const row of keys.key_rows) wrap.append(keyRow(row, onJump));
+  for (const row of keys.key_rows) wrap.append(keyRow(row, onJump, keys));
   wrap.append(
     availSection(keys.avail_main_head, keys.avail_main_cls, keys.avail_main),
     availSection(keys.avail_nav_head, keys.avail_nav_cls, keys.avail_nav),
@@ -463,6 +529,9 @@ export interface RdMacroRowView {
   meta: string;
   cls: string;
   slot: string;
+  source?: string;
+  source_revision?: string;
+  preset?: string;
   edit_href: string;
   toggle_label: string;
   toggle_value: string;
@@ -479,12 +548,17 @@ export interface RdMacroSection {
  *  trigger chips rebind through the SAME learn flow as any control (the
  *  rows carry data-fn="macro.<name>"), enable/disable and delete are real
  *  form twins on this page's verbs, and Edit steps… is the ?macro= door. */
-function renderMacroSection(slotVal: string, mac: RdMacroSection): HTMLElement {
+function renderMacroSection(
+  slotVal: string,
+  mac: RdMacroSection,
+  fallbackAuthority: RdSourceAuthorityView,
+): HTMLElement {
   const sec = el("div", "n-macrosec");
   const head = el("div", "n-group-head");
   head.append(el("span", "n-kick", mac.head));
   sec.append(head);
   for (const r of mac.rows) {
+    const authority = sourceAuthority(r, fallbackAuthority);
     const row = document.createElement("details");
     row.className = r.cls;
     row.dataset.fn = r.fn_name;
@@ -509,6 +583,7 @@ function renderMacroSection(slotVal: string, mac: RdMacroSection): HTMLElement {
       ["slot", r.slot],
       ["name", r.name],
       ["enable", r.toggle_value],
+      ...redesignSourceAuthorityFields(authority),
     ]);
     const toggleBtn = el("button", "n-bpill", r.toggle_label);
     toggleBtn.type = "submit";
@@ -536,6 +611,7 @@ function renderMacroSection(slotVal: string, mac: RdMacroSection): HTMLElement {
     const delForm = inlineForm("/redesign/macro/delete", "macro-delete", [
       ["slot", r.slot],
       ["name", r.name],
+      ...redesignSourceAuthorityFields(authority),
     ]);
     const delBtn = el("button", "n-bbtn danger", "Delete this macro");
     delBtn.type = "submit";
@@ -557,6 +633,9 @@ function renderMacroSection(slotVal: string, mac: RdMacroSection): HTMLElement {
   newForm.action = "/redesign/macro/new";
   newForm.dataset.rdForm = "macro-new";
   newForm.append(hidden("slot", slotVal));
+  for (const [name, value] of redesignSourceAuthorityFields(fallbackAuthority)) {
+    newForm.append(hidden(name, value));
+  }
   const nameBox = document.createElement("input");
   nameBox.className = "n-macnewin";
   nameBox.type = "text";
@@ -640,6 +719,7 @@ export function renderControllerPanel(
   dup.append(dupBtn);
   const clearAll = inlineForm("/redesign/bind/clear-all", "bind-clear-all", [
     ["number", panel.slot_val],
+    ...redesignSourceAuthorityFields(panel),
   ]);
   const mapAll = el("button", "n-autobtn", "Map all…");
   mapAll.type = "button";
@@ -649,10 +729,10 @@ export function renderControllerPanel(
   const clearAllDetails = el("details", "n-clearall");
   const clearAllSummary = el("summary", "n-clearall-sum", "Unbind all…");
   const clearAllBody = el("div", "n-clearall-body");
-  const clearAllBtn = el("button", "n-bbtn sm danger", "Unbind every key");
+  const clearAllBtn = el("button", "n-bbtn sm danger", "Unbind this keyboard’s keys");
   clearAllBtn.type = "submit";
   const clearAllImpact =
-    "Removes every direct key binding and every macro trigger from this controller. Macro steps remain, but the keys must be mapped again.";
+    "Removes every direct key binding and macro trigger from this keyboard’s route to this controller. Other keyboards stay mapped. Macro steps remain, but this keyboard’s triggers must be mapped again.";
   const clearAllImpactId = `rd-unbind-all-impact-${panel.slot_val || "selected"}`;
   const clearAllDescription = el("p", "n-foot", clearAllImpact);
   clearAllDescription.id = clearAllImpactId;
@@ -660,7 +740,7 @@ export function renderControllerPanel(
   clearAllBtn.setAttribute("aria-describedby", clearAllImpactId);
   clearAllBtn.setAttribute(
     "aria-label",
-    `Unbind every key from Player ${panel.slot_val || "selected"}`,
+    `Unbind this keyboard’s keys from Player ${panel.slot_val || "selected"}`,
   );
   clearAll.append(clearAllBtn);
   clearAllBody.append(clearAllDescription, clearAll);
@@ -716,6 +796,7 @@ export function renderControllerPanel(
       panel.bind_face,
       panel.avail_face,
       keyLabels,
+      panel,
     ),
     bindGroup(
       GROUPS[1],
@@ -724,6 +805,7 @@ export function renderControllerPanel(
       panel.bind_dpad,
       panel.avail_dpad,
       keyLabels,
+      panel,
     ),
     bindGroup(
       GROUPS[2],
@@ -732,6 +814,7 @@ export function renderControllerPanel(
       panel.bind_shoulders,
       panel.avail_shoulders,
       keyLabels,
+      panel,
     ),
     bindGroup(
       GROUPS[3],
@@ -740,6 +823,7 @@ export function renderControllerPanel(
       panel.bind_lstick,
       panel.avail_lstick,
       keyLabels,
+      panel,
     ),
     bindGroup(
       GROUPS[4],
@@ -748,6 +832,7 @@ export function renderControllerPanel(
       panel.bind_rstick,
       panel.avail_rstick,
       keyLabels,
+      panel,
     ),
     bindGroup(
       GROUPS[5],
@@ -756,11 +841,12 @@ export function renderControllerPanel(
       panel.bind_system,
       panel.avail_system,
       keyLabels,
+      panel,
     ),
   );
   rows.push(groups);
 
-  rows.push(renderMacroSection(panel.slot_val, mac));
+  rows.push(renderMacroSection(panel.slot_val, mac, panel));
 
   if (panel.bind_foot) rows.push(el("p", "n-foot", panel.bind_foot));
   return rows;

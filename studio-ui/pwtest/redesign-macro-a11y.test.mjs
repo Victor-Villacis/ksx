@@ -74,12 +74,15 @@ function view(open = true) {
     name: "focus-combo",
     slot: "1",
     preset: "Mapper P1",
+    source: "usb:2222:0002:00",
+    source_revision: "right-r7",
+    source_preset: "Mapper P1",
     head: "2 steps",
     trigger: "Triggered by K",
     note: "Choose the controls held in each step.",
     grid_cls: "n-macroll",
-    close_href: "/redesign?slot=1",
-    map_href: "/redesign?slot=1",
+    close_href: "/redesign?slot=1&source=usb%3A2222%3A0002%3A00",
+    map_href: "/redesign?slot=1&source=usb%3A2222%3A0002%3A00",
     motion_line: "",
     policy_line: "",
     ring: "Rows are steps.",
@@ -129,7 +132,7 @@ test("the macro modal owns focus and exposes one complete roving grid", async ()
       <main id="root">
         <details id="macro-row" open>
           <summary>Macro</summary>
-          <a id="opener" href="/redesign?slot=1&macro=focus-combo">Edit steps…</a>
+          <a id="opener" href="/redesign?slot=1&source=usb%3A2222%3A0002%3A00&macro=focus-combo">Edit steps…</a>
         </details>
         <div class="rd-macdlg nd-back none" data-nx="mac-close">
           <div class="nd nd-mac" data-nx="dlg-noop" role="dialog" aria-modal="true" tabindex="-1"></div>
@@ -175,7 +178,11 @@ test("the macro modal owns focus and exposes one complete roving grid", async ()
       },
     });
     document.querySelector("#opener").focus();
-    history.replaceState(null, "", "/redesign?slot=1&macro=focus-combo");
+    history.replaceState(
+      null,
+      "",
+      "/redesign?slot=1&source=usb%3A2222%3A0002%3A00&macro=focus-combo",
+    );
     window.MacroTest.applyRdMacPayload(initial);
   }, view());
 
@@ -266,14 +273,21 @@ test("the macro modal owns focus and exposes one complete roving grid", async ()
   );
 
   // Simulate the Inspector repaint replacing and collapsing the original
-  // opener. Closing must find the equivalent door, reveal it, and focus it.
+  // opener. A second keyboard owns a same-name macro in the same slot, so
+  // closing must find the source-qualified door, reveal it, and focus it.
   await page.evaluate(() => {
     const old = document.querySelector("#opener");
+    const otherKeyboard = document.createElement("a");
+    otherKeyboard.id = "other-keyboard-opener";
+    otherKeyboard.href =
+      "/redesign?slot=1&source=usb%3A1111%3A0001%3A00&macro=focus-combo";
+    otherKeyboard.textContent = "Edit the other keyboard’s steps…";
     const replacement = document.createElement("a");
     replacement.id = "replacement-opener";
-    replacement.href = "/redesign?slot=1&macro=focus-combo";
+    replacement.href =
+      "/redesign?slot=1&source=usb%3A2222%3A0002%3A00&macro=focus-combo";
     replacement.textContent = "Edit steps…";
-    old.replaceWith(replacement);
+    old.replaceWith(otherKeyboard, replacement);
     document.querySelector("#macro-row").removeAttribute("open");
   });
   await page.keyboard.press("Escape");
@@ -287,7 +301,11 @@ test("the macro modal owns focus and exposes one complete roving grid", async ()
   // the first Escape warns and the second is the modal's cancel.
   await page.evaluate(() => {
     document.querySelector("#replacement-opener").focus();
-    history.replaceState(null, "", "/redesign?slot=1&macro=focus-combo");
+    history.replaceState(
+      null,
+      "",
+      "/redesign?slot=1&source=usb%3A2222%3A0002%3A00&macro=focus-combo",
+    );
     const reopened = structuredClone(window.__macroView);
     reopened.open = true;
     reopened.back_cls = "nd-back";

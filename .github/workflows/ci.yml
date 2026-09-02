@@ -532,6 +532,30 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          function Invoke-DownloadWithRetry(
+            [Parameter(Mandatory = $true)][uri] $Uri,
+            [Parameter(Mandatory = $true)][string] $OutFile,
+            [int] $Attempts = 4
+          ) {
+            for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
+              try {
+                Invoke-WebRequest -Uri $Uri -OutFile $OutFile -TimeoutSec 120
+                if ((Get-Item -LiteralPath $OutFile).Length -le 0) {
+                  throw 'The download completed without any bytes.'
+                }
+                return
+              } catch {
+                if (Test-Path -LiteralPath $OutFile) {
+                  Remove-Item -LiteralPath $OutFile -Force
+                }
+                if ($attempt -eq $Attempts) { throw }
+                $delay = 1 -shl ($attempt - 1)
+                Write-Warning "Download attempt $attempt/$Attempts for '$Uri' failed: $($_.Exception.Message). Retrying in $delay second(s)."
+                Start-Sleep -Seconds $delay
+              }
+            }
+          }
           function Get-NormalizedTextSha256([string] $path) {
             $bytes = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $path))
             if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and
@@ -900,10 +924,10 @@ jobs:
               throw "DualSense input source audit did not emit the exact contract: $_"
             }
 
-            Invoke-WebRequest `
+            Invoke-DownloadWithRetry `
               -Uri 'https://raw.githubusercontent.com/torvalds/linux/dac3e89a2c90c2feeb471e1f22a2512ad424b792/drivers/hid/hid-playstation.c' `
               -OutFile $linuxSource
-            Invoke-WebRequest `
+            Invoke-DownloadWithRetry `
               -Uri 'https://raw.githubusercontent.com/libsdl-org/SDL/b669ac244e10fbab4734c7389151f7a4e8ac725f/src/joystick/hidapi/SDL_hidapi_ps5.c' `
               -OutFile $sdlSource
             $feedbackStdout = & powershell -NoProfile -ExecutionPolicy Bypass `
@@ -1009,12 +1033,36 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          function Invoke-DownloadWithRetry(
+            [Parameter(Mandatory = $true)][uri] $Uri,
+            [Parameter(Mandatory = $true)][string] $OutFile,
+            [int] $Attempts = 4
+          ) {
+            for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
+              try {
+                Invoke-WebRequest -Uri $Uri -OutFile $OutFile -TimeoutSec 120
+                if ((Get-Item -LiteralPath $OutFile).Length -le 0) {
+                  throw 'The download completed without any bytes.'
+                }
+                return
+              } catch {
+                if (Test-Path -LiteralPath $OutFile) {
+                  Remove-Item -LiteralPath $OutFile -Force
+                }
+                if ($attempt -eq $Attempts) { throw }
+                $delay = 1 -shl ($attempt - 1)
+                Write-Warning "Download attempt $attempt/$Attempts for '$Uri' failed: $($_.Exception.Message). Retrying in $delay second(s)."
+                Start-Sleep -Seconds $delay
+              }
+            }
+          }
           $lock = Get-Content -LiteralPath tools/hidmaestro-probe/sdk.lock.json -Raw |
             ConvertFrom-Json
           $archive = Join-Path $env:RUNNER_TEMP $lock.releaseAsset.fileName
           $expanded = Join-Path $env:RUNNER_TEMP 'hidmaestro-v1.6.1'
 
-          Invoke-WebRequest -Uri $lock.releaseAsset.url -OutFile $archive
+          Invoke-DownloadWithRetry -Uri $lock.releaseAsset.url -OutFile $archive
           $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
           if ($archiveHash -cne $lock.releaseAsset.sha256) {
             throw "HIDMaestro release archive hash mismatch: $archiveHash"

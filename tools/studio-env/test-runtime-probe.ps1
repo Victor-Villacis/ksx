@@ -69,11 +69,12 @@ try {
 }
 Assert-True $StrictMismatchRejected "Strict exact-process callers no longer reject mismatched identity."
 
-# PID 4 is the protected Windows System process. It normally denies even the
-# query/synchronize handle, while the system process snapshot safely exposes
-# its non-path name. This covers the crash-recovery case where a dead receipt's
-# PID has become a protected unrelated process. If a host does expose the
-# query handle, the ordinary full-image mismatch path proves the same outcome.
+# PID 4 is the protected Windows System process. Some hosts deny the limited
+# handle; others grant it but deny the image query; still others expose the
+# image. The system process snapshot safely exposes its non-path name in every
+# supported case. This covers the crash-recovery case where a dead receipt's
+# PID has become a protected unrelated process without assuming which native
+# inspection call that host permits.
 $ProtectedProcess = Get-Process -Id 4 -ErrorAction SilentlyContinue
 if ($ProtectedProcess) {
     $StaleProtected = Open-KsxExactProcess `

@@ -440,13 +440,18 @@ function Open-KsxExactProcess {
     } catch {
         $Cause = $_.Exception
         while ($Cause.InnerException) { $Cause = $Cause.InnerException }
-        $AccessDenied = $Cause -is [System.ComponentModel.Win32Exception] -and
-            [int]$Cause.NativeErrorCode -eq 5
-        if ($StaleIdentityAsMissing -and $AccessDenied -and
+        # Protected pseudo-processes vary by host policy: some reject
+        # OpenProcess, while others grant the limited handle but reject its
+        # image/path query. Either is a native identity-probe failure. A
+        # different snapshot name still conclusively proves that the PID no
+        # longer belongs to our expected executable; a matching or unreadable
+        # name remains ambiguous and falls through to the original exception.
+        $NativeProbeFailed = $Cause -is [System.ComponentModel.Win32Exception]
+        if ($StaleIdentityAsMissing -and $NativeProbeFailed -and
             (Test-KsxProcessNameProvesStaleIdentity `
                 -ProcessId $ProcessId `
                 -ExpectedExecutable $ExpectedExecutable)) {
-            Write-Verbose "Recorded PID $ProcessId denied identity access but exposes an unrelated process name; treating the receipt generation as stale."
+            Write-Verbose "Recorded PID $ProcessId failed native identity inspection but exposes an unrelated process name; treating the receipt generation as stale."
             return $null
         }
         throw

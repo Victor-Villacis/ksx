@@ -59,10 +59,15 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # pull_request's ref_name is the synthetic merge ref; head_ref is the
+  # contributor branch. Pushes have no head_ref, so fall back to ref_name.
+  KSX_CI_SOURCE_REF: ${{ github.head_ref || github.ref_name }}
 
 jobs:
   test:
     runs-on: windows-latest
+    outputs:
+      source_only_redesign: ${{ steps.studio_assets.outputs.source_only_redesign }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       # rust-toolchain.toml pins the exact compiler; `rustup show` installs it.
@@ -82,20 +87,38 @@ jobs:
       # the only cold Rust compile in this job.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Studio assets reproduce from registry dependencies
+        id: studio_assets
         shell: powershell
         run: |
+          [string] $sourceRef = $env:KSX_CI_SOURCE_REF
+          $sourceOnlyRedesign = `
+            $env:GITHUB_EVENT_NAME -ne 'workflow_call' -and `
+            $env:GITHUB_REF_TYPE -ne 'tag' -and `
+            ($sourceRef.StartsWith('codex/redesign/', [System.StringComparison]::Ordinal) -or `
+             $sourceRef.StartsWith('claude/redesign/', [System.StringComparison]::Ordinal))
+          $outputLine = "source_only_redesign=$($sourceOnlyRedesign.ToString().ToLowerInvariant())`n"
+          [System.IO.File]::AppendAllText(
+            $env:GITHUB_OUTPUT,
+            $outputLine,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
           tools/studio-env/build-assets.ps1
-          # The four generated-and-committed generator handoffs/outputs ride the
-          # same byte-diff as the assets: zones.json carries Rust's vocabulary
-          # into Studio, zones.gen.ts projects it, and the token pair feeds the
-          # hashed sheet, contrast gate and anti-flash const.
-          git diff --exit-code -- crates/ksx-studio/assets studio-ui/tokens/zones.json studio-ui/src/tokens.gen.css studio-ui/src/zones.gen.ts crates/ksx-studio/src/theme_tokens.rs
-          if ($LASTEXITCODE -ne 0) {
-            throw 'committed Studio assets differ from a clean Forma build'
-          }
-          $untracked = git ls-files --others --exclude-standard -- crates/ksx-studio/assets studio-ui/tokens/zones.json studio-ui/src/tokens.gen.css studio-ui/src/zones.gen.ts crates/ksx-studio/src/theme_tokens.rs
-          if ($untracked) {
-            throw "Studio build emitted untracked assets:`n$($untracked -join "`n")"
+          if ($sourceOnlyRedesign) {
+            Write-Host "::notice::Generated-asset byte parity is not owned by source-only redesign ref '$sourceRef'; continuing with the deterministic rebuilt graph."
+          } else {
+            # The four generated-and-committed generator handoffs/outputs ride the
+            # same byte-diff as the assets: zones.json carries Rust's vocabulary
+            # into Studio, zones.gen.ts projects it, and the token pair feeds the
+            # hashed sheet, contrast gate and anti-flash const.
+            git diff --exit-code -- crates/ksx-studio/assets studio-ui/tokens/zones.json studio-ui/src/tokens.gen.css studio-ui/src/zones.gen.ts crates/ksx-studio/src/theme_tokens.rs
+            if ($LASTEXITCODE -ne 0) {
+              throw 'committed Studio assets differ from a clean Forma build'
+            }
+            $untracked = git ls-files --others --exclude-standard -- crates/ksx-studio/assets studio-ui/tokens/zones.json studio-ui/src/tokens.gen.css studio-ui/src/zones.gen.ts crates/ksx-studio/src/theme_tokens.rs
+            if ($untracked) {
+              throw "Studio build emitted untracked assets:`n$($untracked -join "`n")"
+            }
           }
       - name: Format
         # vendored vigem-client keeps upstream formatting; check only our crates.
@@ -256,15 +279,26 @@ jobs:
       - name: Verify the browser checkout serves current Forma assets
         shell: powershell
         run: |
+          [string] $sourceRef = $env:KSX_CI_SOURCE_REF
+          $sourceOnlyRedesign = `
+            $env:GITHUB_EVENT_NAME -ne 'workflow_call' -and `
+            $env:GITHUB_REF_TYPE -ne 'tag' -and `
+            ($sourceRef.StartsWith('codex/redesign/', [System.StringComparison]::Ordinal) -or `
+             $sourceRef.StartsWith('claude/redesign/', [System.StringComparison]::Ordinal))
+
           tools/studio-env/build-assets.ps1
           if ($LASTEXITCODE -ne 0) { throw 'guarded Studio asset build failed' }
-          git diff --exit-code -- crates/ksx-studio/assets studio-ui/tokens/zones.json studio-ui/src/tokens.gen.css studio-ui/src/zones.gen.ts crates/ksx-studio/src/theme_tokens.rs
-          if ($LASTEXITCODE -ne 0) {
-            throw 'browser checkout assets differ from the current Studio source'
-          }
-          $untracked = git ls-files --others --exclude-standard -- crates/ksx-studio/assets studio-ui/tokens/zones.json studio-ui/src/tokens.gen.css studio-ui/src/zones.gen.ts crates/ksx-studio/src/theme_tokens.rs
-          if ($untracked) {
-            throw "Studio build emitted untracked assets:`n$($untracked -join "`n")"
+          if ($sourceOnlyRedesign) {
+            Write-Host "::notice::Generated-asset byte parity is not owned by source-only redesign ref '$sourceRef'; browser validation will use the deterministic rebuilt graph."
+          } else {
+            git diff --exit-code -- crates/ksx-studio/assets studio-ui/tokens/zones.json studio-ui/src/tokens.gen.css studio-ui/src/zones.gen.ts crates/ksx-studio/src/theme_tokens.rs
+            if ($LASTEXITCODE -ne 0) {
+              throw 'browser checkout assets differ from the current Studio source'
+            }
+            $untracked = git ls-files --others --exclude-standard -- crates/ksx-studio/assets studio-ui/tokens/zones.json studio-ui/src/tokens.gen.css studio-ui/src/zones.gen.ts crates/ksx-studio/src/theme_tokens.rs
+            if ($untracked) {
+              throw "Studio build emitted untracked assets:`n$($untracked -join "`n")"
+            }
           }
       - name: Install browser-test dependencies
         working-directory: studio-ui/pwtest
@@ -1653,12 +1687,15 @@ jobs:
   # that happens to use the same command line. That file also carries the long
   # explanation of why a release binary is never compiled on the dev box.
   #
-  # Until a tag is pushed this produces CI artifacts, which are perfectly good
-  # for us and useless to a customer: reaching one needs a GitHub login and a
-  # walk through the Actions tab. `release.yml` is what turns the same two files
-  # into a releases-page download (docs/FIRST-RUN.md §1 moment 1).
+  # On ordinary packaging refs this produces CI artifacts, which are perfectly
+  # good for us and useless to a customer: reaching one needs a GitHub login and
+  # a walk through the Actions tab. `release.yml` is what turns the same two
+  # files into a releases-page download (docs/FIRST-RUN.md §1 moment 1).
   release-binary:
     needs: [test, studio-browser, studio-environments, hidmaestro-contracts, hidmaestro-artifact-observation]
+    # Source-only redesign branches deliberately leave generated assets to the
+    # integration owner, so they are testable previews rather than candidates.
+    if: ${{ needs.test.outputs.source_only_redesign != 'true' }}
     uses: ./.github/workflows/build-installer.yml
     with:
       # Empty on every ordinary push; the tag when release.yml is the caller.

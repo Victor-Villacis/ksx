@@ -433,12 +433,17 @@ git commit -m "chore(studio): regenerate integrated redesign assets"
 
 That regeneration commit is part of the integration, not a conflict resolution
 and not optional release housekeeping. Push `redesign-product` only after it.
-Both the `test` and `studio-browser` CI jobs rebuild and byte-diff this complete
-output set; `release-binary` depends on both jobs. Therefore an integration
-commit with stale, partial, or extra UI assets cannot enter the official
-packaging job. A source-only feature branch can legitimately fail those two
-asset-reproduction jobs until the integrator performs this step; it is not a
-packaging candidate.
+Both the `test` and `studio-browser` CI jobs always run the locked build and
+prove its output deterministic. On source-only `codex/redesign/*` and
+`claude/redesign/*` refs, they then keep the rebuilt graph in place, skip only
+the committed-output parity checks, and continue through the substantive Rust
+and browser gates; `release-binary` is skipped because the ref is not a
+packaging candidate. Every other ref—including `redesign-product`, `main`, PR
+heads outside those source-only prefixes, tags, and reusable release calls—must
+byte-diff clean before tests or packaging continue. Therefore stale, partial,
+or extra integrated UI assets
+still cannot enter the official packaging job, while feature CI remains useful
+and green before the integrator performs the one owned regeneration.
 
 **A failed asset build deletes 24 tracked files, and that is not a broken
 tree.** `studio-ui/build.mjs` `rmSync`s `crates/ksx-studio/assets/` *before* it

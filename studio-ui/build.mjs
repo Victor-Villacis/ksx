@@ -287,7 +287,7 @@ try {
     // controller parking, and fixed-size overview doors into device-local
     // controls, guarded recovery focus, and the progressively-enhanced policy
     // radiogroup and visible lifecycle guidance bring the measured pass to
-    // 305,264 Brotli bytes. Keep only 386
+    // 305,594 Brotli bytes. Keep only 56
     // bytes of headroom so this accessibility work cannot turn into an
     // open-ended budget.
     budgetThreshold: 305_650,

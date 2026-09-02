@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "build_hash": "a648a4ac16cfaf5c3fd6b894c122362fc1388907b20ddd3bc28abd43822e80f8",
+  "build_hash": "51fcfb850556de3cef173c0b61dd2ceac5f7b1d2461e4c2cbc2afefa3bdb78f4",
   "assets": {
     "check.ir": "check.374f4d85.ir",
     "check.js": "check.0f51f61e.js",
@@ -9,7 +9,7 @@
     "pads.ir": "pads.4b660dab.ir",
     "pads.js": "pads.3c56f42b.js",
     "redesign.ir": "redesign.bdbb2a97.ir",
-    "redesign.js": "redesign.a982cac4.js",
+    "redesign.js": "redesign.7e10f5de.js",
     "studio.css": "studio.06e7fb58.css"
   },
   "routes": {
@@ -22,7 +22,7 @@
       ],
       "fonts": [],
       "total_size_br": 107813,
-      "budget_warn_threshold": 305650,
+      "budget_warn_threshold": 305775,
       "ir": "check.374f4d85.ir"
     },
     "/pads": {
@@ -34,7 +34,7 @@
       ],
       "fonts": [],
       "total_size_br": 107972,
-      "budget_warn_threshold": 305650,
+      "budget_warn_threshold": 305775,
       "ir": "pads.4b660dab.ir"
     },
     "/devices": {
@@ -46,19 +46,19 @@
       ],
       "fonts": [],
       "total_size_br": 109425,
-      "budget_warn_threshold": 305650,
+      "budget_warn_threshold": 305775,
       "ir": "devices.7feff2d8.ir"
     },
     "/redesign": {
       "js": [
-        "redesign.a982cac4.js"
+        "redesign.7e10f5de.js"
       ],
       "css": [
         "studio.06e7fb58.css"
       ],
       "fonts": [],
-      "total_size_br": 305472,
-      "budget_warn_threshold": 305650,
+      "total_size_br": 305725,
+      "budget_warn_threshold": 305775,
       "ir": "redesign.bdbb2a97.ir"
     }
   }

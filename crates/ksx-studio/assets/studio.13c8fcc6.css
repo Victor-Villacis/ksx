@@ -24935,8 +24935,15 @@ form.rd-undochip .n-undo-btn {
 
 .rd-chip-caret {
   display: inline-block;
+  flex: none;
   color: var(--n-accent);
   font-size: 9px;
+}
+
+.rd-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Hover spotlight: the hovered widget stays lit, the rest recede. */

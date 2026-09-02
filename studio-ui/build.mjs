@@ -286,11 +286,11 @@ try {
     // many-to-many mapping graph, guarded device removal, and rollback-safe
     // controller parking, and fixed-size overview doors into device-local
     // controls, guarded recovery focus, and the progressively-enhanced policy
-    // radiogroup, visible lifecycle guidance, and collision-safe proximity
-    // navigation bring the measured pass to 305,725 Brotli bytes. Keep
-    // only 50 bytes of headroom so this interaction safety work cannot turn
-    // into an open-ended budget.
-    budgetThreshold: 305_775,
+    // radiogroup, visible lifecycle guidance, and focus-safe, fully bounded
+    // proximity navigation bring the measured pass to 306,454 Brotli bytes.
+    // Keep only 50 bytes of headroom so this interaction safety work cannot
+    // turn into an open-ended budget.
+    budgetThreshold: 306_504,
     ssr: true,
     ssrEntryPoints: {
       check: "src/check.ts",

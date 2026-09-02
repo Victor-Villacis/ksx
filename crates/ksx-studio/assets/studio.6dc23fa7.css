@@ -15256,6 +15256,15 @@ button.n-keychip:hover {
   min-width: 0;
 }
 
+/* Author styles override the browser's default `[hidden]` rule. Physical
+   keyboard boards filter this server-wide blueprint per exact source, so the
+   legend and any peer-controller chips it marks hidden must win over the flex
+   declarations below. */
+.n-legend[hidden],
+.n-legend > [hidden] {
+  display: none;
+}
+
 .n-lgd {
   display: flex;
   align-items: center;
@@ -18610,20 +18619,7 @@ a.nm-link {
   color: var(--n-warn, var(--n-text));
 }
 
-/* ═══ THE REDESIGN LANE (/redesign) ═══════════════════════════════════════
-   The transplant rebuild's chrome, translated from the Canvas interaction
-   UI patterns design (docs/redesign/canvas-ui-patterns/). Scoped under
-   `.rd` beside the `nocturne` root class: the lane RIDES the shared sheet —
-   tokens, buttons, the engine sheet — and these rules only re-home the
-   canvas chrome: edge-to-edge ground, the framed map panel with a header,
-   the floating zoom cluster, the reading-tier line. Colors are `--n-*`
-   roles only, so every theme reaches this lane for free.
-
-   Specificity note, load-bearing: the engine sheet's minimap rules are
-   `[data-forma-canvas] .forma-canvas-*` — (0,2,0), which BEATS the one-class
-   nocturne skin and is why the map stayed engine-dark under the light theme.
-   Every override here is `.rd .forma-canvas-*` — the same (0,2,0), later in
-   the concatenated sheet, so the tie resolves this way by order. */
+/* ═══ REDESIGN WORKBENCH (/redesign) ═════════════════════════════════════ */
 
 .rd .rd-top {
   gap: 10px;
@@ -18902,14 +18898,33 @@ a.nm-link {
    A native details, so the roster works with scripting off — which is why
    its summary is NOT an `.n-autobtn` (that class is scripting-only chrome,
    hidden until the wire stamps `.js`). */
-:is(.rd-themed, .rd-themed-compact) {
+.rd-themed {
   position: relative;
 }
 
-/* The compact copy lives inside Setup so the 390px lifecycle rail never has
-   to trade away Save/Apply/Stop for appearance preferences. */
-.rd-theme-compact-home {
-  display: none;
+.rd-theme-home {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 7;
+  transition: right 160ms ease-out;
+}
+
+.rd-theme-home:has(.rd-themed[open]) {
+  z-index: 36;
+}
+
+/* The desktop Inspector owns the right edge. Move the global Theme trigger
+   beside it while the drawer is open instead of leaving a closed trigger
+   underneath the drawer or raising that trigger through the drawer. */
+@media (min-width: 601px) {
+  .rd.is-inspector-open .rd-theme-home {
+    right: 340px;
+  }
+
+  .rd.is-inspector-open .rd-thememenu {
+    width: min(300px, calc(100vw - 374px));
+  }
 }
 
 .rd-utility-compact-home {
@@ -19065,14 +19080,18 @@ button.rd-utility-action {
 
 /* The Inspector is fixed at layer 35. Lift only the open disclosure above it
    so the resting topbar does not become an unnecessary stacking context. */
-:is(.rd-themed, .rd-themed-compact)[open] {
+.rd-themed[open] {
   /* The disclosure must remain above the Inspector while it is open, but
      below the modal layer. */
   z-index: 36;
 }
 
-:is(.rd-theme-sum, .rd-theme-compact-sum) {
-  display: inline-block;
+.rd-theme-sum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  min-height: 34px;
   padding: 5px 11px;
   border: 1px solid var(--n-line);
   border-radius: 8px;
@@ -19085,22 +19104,22 @@ button.rd-utility-action {
   user-select: none;
 }
 
-:is(.rd-theme-sum, .rd-theme-compact-sum)::-webkit-details-marker {
+.rd-theme-sum::-webkit-details-marker {
   display: none;
 }
 
-:is(.rd-theme-sum, .rd-theme-compact-sum):hover,
-:is(.rd-themed, .rd-themed-compact)[open] > :is(.rd-theme-sum, .rd-theme-compact-sum) {
+.rd-theme-sum:hover,
+.rd-themed[open] > .rd-theme-sum {
   border-color: var(--n-accent-line);
   color: var(--n-accent-2);
 }
 
-:is(.rd-thememenu, .rd-thememenu-compact) {
+.rd-thememenu {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
   z-index: 12;
-  width: 300px;
+  width: min(300px, calc(100vw - 16px));
   padding: 10px 12px 12px;
   border: 1px solid var(--n-line);
   border-radius: 12px;
@@ -19108,11 +19127,7 @@ button.rd-utility-action {
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4);
 }
 
-/* ── The operational shell ─────────────────────────────────────────────────────
-   Draft, session and exact-device capture are three separate state machines.
-   Their compact summary lives in the bar; the native disclosure keeps the
-   complete recovery path available before the client wire has loaded (and
-   when it never loads). */
+/* Draft, session and exact-device capture remain separate state machines. */
 
 .rd .rd-top {
   position: relative;
@@ -19127,24 +19142,26 @@ button.rd-utility-action {
   backdrop-filter: saturate(135%) blur(12px);
 }
 
-.rd-setupd {
+/* Profile is a compact persistence menu, not a workflow dashboard. Save stays
+   direct in the lifecycle group; Load and Start over live here. */
+.rd-profiled {
   position: relative;
   flex: none;
   min-width: 0;
 }
 
-.rd-setupd[open] {
+.rd-profiled[open] {
   z-index: 38;
 }
 
-.rd-setup-sum {
+.rd-profile-sum {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 7px;
   min-width: 0;
-  max-width: 280px;
+  max-width: 260px;
   min-height: 34px;
-  padding: 0 var(--sp-3);
+  padding: 0 10px;
   overflow: hidden;
   border: 1px solid var(--n-line);
   border-radius: var(--r-md);
@@ -19156,114 +19173,177 @@ button.rd-utility-action {
   user-select: none;
 }
 
-.rd-setup-sum::-webkit-details-marker {
+.rd-profile-sum::-webkit-details-marker {
   display: none;
 }
 
-.rd-setup-sum:hover,
-.rd-setupd[open] > .rd-setup-sum {
+.rd-profile-sum:hover,
+.rd-profile-sum:focus-visible,
+.rd-profiled[open] > .rd-profile-sum {
   border-color: var(--n-accent-line);
   background: var(--n-accent-dim);
   color: var(--n-text);
 }
 
-.rd[data-rd-refresh-state="stale"] .rd-setup-sum {
-  border-color: color-mix(in srgb, var(--n-warn) 62%, var(--n-line));
-  box-shadow: inset 3px 0 var(--n-warn);
-}
-
-.rd[data-rd-refresh-state="stale"] .rd-setup-mark {
-  color: var(--n-warn);
-}
-
-.rd-setup-sum:active {
-  background: color-mix(in srgb, var(--n-accent) 16%, transparent);
-}
-
-.rd-setup-sum:focus-visible {
+.rd-profile-sum:focus-visible {
   outline: 2px solid var(--n-accent);
   outline-offset: 2px;
 }
 
-.rd-setup-mark {
-  flex: none;
+.rd-profile-icon {
   color: var(--n-accent-2);
-  font-size: var(--fs-micro);
 }
 
-.rd-setup-compact,
-.rd-draft-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rd-setup-compact {
+.rd-profile-word {
   color: var(--n-text);
   font-weight: var(--fw-semibold);
 }
 
-.rd-setup-divider {
+.rd-profile-state {
+  min-width: 0;
+  overflow: hidden;
   color: var(--n-text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.rd-setup-sum .rd-caret {
+.rd-profile-session {
   flex: none;
-  margin-left: auto;
+  padding: 1px 6px;
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-pill);
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.rd-profile-session[data-state="playing"] {
+  border-color: color-mix(in srgb, var(--n-ok) 48%, var(--n-line));
+  background: var(--ok-dim);
+  color: var(--n-ok);
+}
+
+.rd-profile-sum .rd-caret {
+  flex: none;
   transition: transform 140ms ease-out;
 }
 
-.rd-setupd[open] > .rd-setup-sum .rd-caret {
+.rd-profiled[open] > .rd-profile-sum .rd-caret {
   transform: rotate(180deg);
 }
 
-.rd-setup-panel {
-  position: fixed;
-  top: 52px;
-  right: var(--sp-3);
-  left: var(--sp-3);
+.rd-profile-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
   z-index: 38;
   display: grid;
-  gap: var(--sp-3);
-  max-height: calc(100vh - 64px);
-  padding: var(--sp-4);
+  gap: var(--sp-2);
+  width: min(360px, calc(100vw - 16px));
+  max-height: calc(100vh - 68px);
+  padding: var(--sp-3);
   overflow: auto;
-  overscroll-behavior: contain;
   border: 1px solid var(--n-line-2);
-  border-radius: 0 0 var(--r-xl) var(--r-xl);
-  background:
-    linear-gradient(145deg, color-mix(in srgb, var(--n-accent) 5%, transparent), transparent 44%),
-    color-mix(in srgb, var(--n-panel) 98%, transparent);
-  box-shadow: 0 22px 56px color-mix(in srgb, var(--n-bg) 78%, transparent);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--n-panel) 98%, transparent);
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--n-bg) 72%, transparent);
 }
 
-.rd-setupd:not([open]) > .rd-setup-panel {
-  display: none;
-}
-
-.rd-setup-panel-head {
+.rd-profile-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--sp-4);
+  gap: var(--sp-3);
+}
+
+.rd-profile-head > div {
+  display: grid;
+  gap: 2px;
   min-width: 0;
 }
 
-.rd-setup-panel-head > div {
-  min-width: 0;
+.rd-profile-head strong {
+  color: var(--n-text);
+  font-size: var(--fs-sm);
 }
 
-.rd-setup-panel-head .n-kick {
-  color: var(--n-accent-2);
-}
-
-.rd-setup-line {
-  margin-top: var(--sp-1);
-  color: var(--n-text-2);
-  font-size: var(--fs-xs);
+.rd-profile-head p,
+.rd-profile-session-line,
+.rd-profile-escape-line {
+  margin: 0;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
   line-height: var(--lh-snug);
   text-wrap: pretty;
+}
+
+.rd-profile-escape-line:empty {
+  display: none;
+}
+
+.rd-profile-menu > form .rd-panel-action,
+.rd-profile-menu .rd-start-over .rd-panel-action {
+  width: 100%;
+}
+
+.rd-profile-policy-fallback[hidden] {
+  display: none;
+}
+
+.rd-profile-policy-fallback {
+  margin-top: var(--sp-1);
+}
+
+.rd-profile-policy-fallback .rd-policy-editor-host {
+  position: static;
+  grid-column: 1 / -1;
+}
+
+.rd-profile-policy-fallback .rd-policy-editor-host .rd-boardpick-pop {
+  width: 100%;
+  min-width: 0;
+  max-height: min(420px, calc(100vh - 180px));
+  margin-top: var(--sp-2);
+  transform: none;
+}
+
+.rd-action-reasons {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A disabled native button cannot receive keyboard focus. Keep the first
+   useful prerequisite in sight instead of hiding all guidance in title and
+   aria-describedby attributes that those buttons cannot expose. */
+.rd-action-guidance {
+  position: absolute;
+  inset-block-start: calc(100% + var(--sp-2));
+  inset-inline-end: 0;
+  z-index: 2;
+  width: max-content;
+  max-width: min(430px, calc(100vw - var(--sp-4)));
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--n-warn) 40%, var(--n-line));
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--n-panel) 96%, transparent);
+  box-shadow: var(--shadow-1);
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  white-space: normal;
+}
+
+.rd-action-guidance:empty {
+  display: none;
 }
 
 .rd-refresh-health:not([hidden]) {
@@ -19372,6 +19452,16 @@ button.rd-utility-action {
   align-items: center;
 }
 
+/* The desktop Inspector is an overlay, while recovery is a full-width status
+   band beneath it. Reserve the drawer's footprint so its right-aligned action
+   never looks visible while actually sitting under an intercepting panel. */
+@media (min-width: 601px) {
+  .rd.is-inspector-open .rd-attention,
+  .rd.is-inspector-open .rd-health-alert:not([hidden]) {
+    padding-right: calc(328px + var(--sp-4));
+  }
+}
+
 .rd-health-alert:not([hidden]) {
   grid-template-columns: minmax(0, 1fr) auto;
   border-color: color-mix(in srgb, var(--n-warn) 58%, var(--n-line));
@@ -19381,167 +19471,47 @@ button.rd-utility-action {
   color: var(--n-warn);
 }
 
-/* Four steps, four facts. The active step gets space; completed and later
-   steps remain readable without turning this status rail into a wizard. */
-.rd-journey {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--sp-2);
-}
-
-.rd-journey-step {
+.rd-capture-recovery-sheet {
   position: relative;
+  z-index: 9;
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
   gap: var(--sp-2);
-  align-items: start;
-  min-width: 0;
-  min-height: 62px;
-  padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--n-line);
-  border-radius: var(--r-lg);
-  background: color-mix(in srgb, var(--n-panel-2) 74%, transparent);
-  width: 100%;
-  margin: 0;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  appearance: none;
-  cursor: pointer;
+  max-height: min(420px, calc(100vh - 110px));
+  padding: var(--sp-3) var(--sp-4);
+  overflow: auto;
+  border-bottom: 1px solid color-mix(in srgb, var(--n-warn) 42%, var(--n-line));
+  background: color-mix(in srgb, var(--n-panel) 98%, transparent);
+  box-shadow: 0 14px 32px color-mix(in srgb, var(--n-bg) 58%, transparent);
 }
 
-.rd-journey-step:hover {
-  border-color: var(--n-accent-line);
-  background: color-mix(in srgb, var(--n-accent) 7%, var(--n-panel-2));
-}
-
-.rd-journey-step:focus-visible,
-.rd-capture-card:focus-visible,
-.rd-held-row:focus-visible,
-#rd-play-reason:focus-visible {
-  outline: 2px solid var(--n-accent);
-  outline-offset: 2px;
-}
-
-.rd-journey-step::after {
-  position: absolute;
-  right: calc(var(--sp-2) * -1 - 1px);
-  top: 50%;
-  width: var(--sp-2);
-  border-top: 1px solid var(--n-line);
-  content: "";
-}
-
-.rd-journey-step:last-child::after {
+.rd-capture-recovery-sheet[hidden] {
   display: none;
 }
 
-.rd-journey-badge {
-  min-width: 48px;
-  padding: 2px var(--sp-2);
-  border: 1px solid var(--n-line-2);
-  border-radius: var(--r-pill);
-  color: var(--n-text-3);
-  font-size: var(--fs-micro);
-  font-weight: var(--fw-bold);
-  letter-spacing: var(--track-mono);
-  line-height: var(--lh-snug);
-  text-align: center;
-  text-transform: uppercase;
+.rd-capture-native {
+  display: none;
 }
 
-.rd-journey-copy {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.rd-journey-copy strong {
-  color: var(--n-text-2);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-}
-
-.rd-journey-copy > span {
-  display: -webkit-box;
-  overflow: hidden;
-  color: var(--n-text-3);
-  font-size: var(--fs-micro);
-  line-height: var(--lh-snug);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.rd-journey-step.done {
-  border-color: color-mix(in srgb, var(--n-ok) 32%, var(--n-line));
-}
-
-.rd-journey-step.done .rd-journey-badge {
-  border-color: color-mix(in srgb, var(--n-ok) 54%, var(--n-line));
-  background: var(--ok-dim);
-  color: var(--n-ok);
-}
-
-.rd-journey-step.now {
-  border-color: var(--n-accent-line);
-  background: var(--n-accent-dim);
-  box-shadow: inset 3px 0 var(--n-accent);
-}
-
-.rd-journey-step.now .rd-journey-badge {
-  border-color: var(--n-accent-line);
-  color: var(--n-accent-2);
-}
-
-.rd-journey-step.now .rd-journey-copy strong,
-.rd-journey-step.blocked .rd-journey-copy strong {
-  color: var(--n-text);
-}
-
-.rd-journey-step.blocked {
-  border-color: color-mix(in srgb, var(--n-warn) 54%, var(--n-line));
-  background: var(--warn-dim);
-  box-shadow: inset 3px 0 var(--n-warn);
-}
-
-.rd-journey-step.blocked .rd-journey-badge {
-  border-color: color-mix(in srgb, var(--n-warn) 62%, var(--n-line));
-  color: var(--n-warn);
-}
-
-.rd-journey-step.later {
-  opacity: 0.72;
-}
-
-.rd-setup-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--sp-3);
-  align-items: start;
-}
-
-.rd-setup-card,
-.rd-session-state {
+.nocturne:not(.js) .rd-capture-native {
   display: grid;
   gap: var(--sp-2);
-  align-content: start;
-  min-width: 0;
-  padding: var(--sp-3);
-  border: 1px solid var(--n-line);
-  border-radius: var(--r-lg);
-  background: color-mix(in srgb, var(--n-panel-2) 76%, transparent);
+  padding: var(--sp-4);
+  border-bottom: 1px solid var(--n-line);
+  background: var(--n-panel);
 }
 
-.rd-setup-card > h2,
-.rd-session-state > h2 {
-  color: var(--n-text);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-  line-height: var(--lh-tight);
+.rd-capture-native > form {
+  display: grid;
+  gap: var(--sp-2);
+  max-width: 720px;
+}
+
+.rd-capture-consents {
+  display: grid;
+  gap: var(--sp-2);
 }
 
 .rd-card-lede,
-.rd-escape-line,
 .rd-capture-recovery-line,
 .rd-action-reason {
   color: var(--n-text-2);
@@ -19550,7 +19520,6 @@ button.rd-utility-action {
   text-wrap: pretty;
 }
 
-.rd-state-strip,
 .rd-devcard-states {
   display: flex;
   flex-wrap: wrap;
@@ -19559,10 +19528,8 @@ button.rd-utility-action {
   margin: 0;
 }
 
-.rd-state-badge,
 .rd-device-state,
-.rd-dev-connectedchip,
-.rd-dev-capturechip {
+.rd-dev-connectedchip {
   width: fit-content;
   padding: 2px 7px;
   border: 1px solid var(--n-line-2);
@@ -19575,39 +19542,19 @@ button.rd-utility-action {
   white-space: nowrap;
 }
 
-:is(.rd-state-badge, .rd-device-state, .rd-dev-capturechip)[data-state="ready"],
-.rd-device-state[data-state="connected"] {
+.rd-device-state:is([data-state="ready"], [data-state="connected"]) {
   border-color: color-mix(in srgb, var(--n-ok) 44%, var(--n-line));
   background: var(--ok-dim);
   color: var(--n-ok);
 }
 
-:is(.rd-state-badge, .rd-device-state, .rd-dev-capturechip)[data-state="attention"] {
+.rd-device-state[data-state="attention"] {
   border-color: color-mix(in srgb, var(--n-warn) 54%, var(--n-line));
   background: var(--warn-dim);
   color: var(--n-warn);
 }
 
-.rd-state-badge[data-state="playing"] {
-  border-color: color-mix(in srgb, var(--n-ok) 54%, var(--n-line));
-  background: var(--ok-dim);
-  color: var(--n-ok);
-}
-
-.rd-state-device {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--n-text-3);
-  font-size: var(--fs-micro);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rd-state-device:empty {
-  display: none;
-}
-
-:is(.rd-escape-line, .rd-capture-recovery-line, .rd-action-reason):empty,
+:is(.rd-capture-recovery-line, .rd-action-reason):empty,
 .rd-held-note:empty {
   display: none;
 }
@@ -19633,8 +19580,6 @@ button.rd-utility-action {
   line-height: var(--lh-snug);
 }
 
-.rd-setup-card form,
-.rd-session-state form,
 .rd-restart-dialog form,
 .rd-runform {
   margin: 0;
@@ -19749,8 +19694,7 @@ button.rd-utility-action {
 }
 
 .rd-danger-confirm.none,
-.rd-capture-prepare.none,
-.rd-held-recovery.none {
+.rd-capture-prepare.none {
   display: none;
 }
 
@@ -19761,84 +19705,11 @@ button.rd-utility-action {
   accent-color: var(--n-accent);
 }
 
-.rd-session-state.running {
-  border-color: color-mix(in srgb, var(--n-ok) 46%, var(--n-line));
-  background:
-    linear-gradient(140deg, var(--ok-dim), transparent 54%),
-    color-mix(in srgb, var(--n-panel-2) 76%, transparent);
-}
-
-.rd-session-state.down {
-  border-color: color-mix(in srgb, var(--n-warn) 46%, var(--n-line));
-}
-
-.rd-escape-line:not(:empty),
 .rd-capture-recovery-line:not(:empty) {
   padding: var(--sp-2);
   border-left: 2px solid var(--n-warn);
   background: var(--warn-dim);
   color: color-mix(in srgb, var(--n-warn) 74%, var(--n-text));
-}
-
-.rd-action-notes {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--sp-1) var(--sp-2);
-  margin: 0;
-  padding-top: var(--sp-1);
-  border-top: 1px solid var(--n-line);
-  font-size: var(--fs-micro);
-  line-height: var(--lh-snug);
-}
-
-.rd-action-notes dt {
-  color: var(--n-text-3);
-  font-weight: var(--fw-semibold);
-}
-
-.rd-action-notes dd {
-  min-width: 0;
-  margin: 0;
-  color: var(--n-text-2);
-}
-
-.rd-gamebar-help {
-  margin: 0;
-  padding-top: var(--sp-2);
-  border-top: 1px solid var(--n-line);
-  color: var(--n-text-3);
-  font-size: var(--fs-micro);
-  line-height: var(--lh-snug);
-}
-
-.rd-gamebar-help a {
-  color: var(--n-accent-2);
-  font-weight: var(--fw-semibold);
-  text-decoration: none;
-}
-
-.rd-gamebar-help a:hover,
-.rd-gamebar-help a:focus-visible {
-  text-decoration: underline;
-}
-
-.rd-panel-replace {
-  padding-top: var(--sp-1);
-  border-top: 1px solid var(--n-line);
-}
-
-.rd-capture-card[data-capture-mode="prepare"],
-.rd-capture-card[data-capture-mode="held"],
-.rd-capture-card[data-capture-mode="blocked"],
-.rd-capture-card[data-capture-mode="unavailable"],
-.rd-capture-card[data-capture-mode="release-held"] {
-  border-color: color-mix(in srgb, var(--n-warn) 52%, var(--n-line));
-}
-
-.rd-capture-card[data-capture-mode="release"],
-.rd-capture-card[data-capture-mode="ready"],
-.rd-capture-card[data-capture-mode="prepare-optional"] {
-  border-color: color-mix(in srgb, var(--n-ok) 40%, var(--n-line));
 }
 
 .rd-capture-prepare {
@@ -19862,19 +19733,6 @@ button.rd-utility-action {
 
 .rd-consent.compact {
   max-width: 220px;
-}
-
-.rd-held-recovery {
-  display: grid;
-  gap: var(--sp-2);
-  padding-top: var(--sp-2);
-  border-top: 1px solid color-mix(in srgb, var(--n-warn) 42%, var(--n-line));
-}
-
-.rd-held-recovery > h3 {
-  color: var(--n-warn);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
 }
 
 .rd-held-row {
@@ -19925,6 +19783,12 @@ button.rd-utility-action {
 
 .rd-run-actions > :is(.rd-runform, .rd-live-retry) {
   flex: none;
+}
+
+/* Scripted Apply owns the restart decision dialog. This native Restart form
+   remains in the served header only as the no-script recovery path. */
+.nocturne.js .rd-run-actions > .rd-replaceform {
+  display: none;
 }
 
 .rd-runbtn {
@@ -20204,24 +20068,51 @@ button.rd-utility-action {
     display: none !important;
   }
 
-  .rd-setup-sum {
-    max-width: 240px;
-  }
 }
 
-/* Product-critical verbs own the rail. Theme and operational tools already
-   have complete native copies in Setup; keep those copies primary until a
-   1440 px desktop can carry the direct triggers without clipping a live
-   status or action. */
+/* Product-critical verbs own the labelled rail. Theme remains a global
+   top-level preference and collapses to one icon; operational tools keep a
+   compact header trigger until the rail can carry their full label. */
 @media (width < 1440px) {
-  .rd-theme-rail-home,
   .rd-utility-rail-home {
     display: none;
   }
 
-  .rd-theme-compact-home,
   .rd-utility-compact-home {
     display: block;
+    flex: none;
+  }
+
+  .rd-utility-compact-home .rd-utility-sum {
+    width: 36px;
+    min-width: 36px;
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  .rd-utility-compact-home .rd-utility-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .rd-theme-sum {
+    width: 36px;
+    min-width: 36px;
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  .rd-theme-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 }
 
@@ -20249,23 +20140,19 @@ button.rd-utility-action {
     padding-left: var(--sp-2);
   }
 
-  .rd-setup-sum {
-    max-width: 190px;
-    padding-right: var(--sp-2);
-    padding-left: var(--sp-2);
+  .rd-profile-sum {
+    max-width: 138px;
   }
 
-  .rd-setup-divider,
-  .rd-draft-label {
-    display: none;
-  }
-
-  .rd-setup-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .rd-capture-card {
-    grid-column: 1 / -1;
+  .rd-profile-state,
+  .rd-profile-session {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .rd-utility-rail-home .rd-utility-sum {
@@ -20295,91 +20182,19 @@ button.rd-utility-action {
     font-size: var(--fs-xs);
   }
 
-  .rd-theme-compact-home {
-    width: min(100%, 300px);
-  }
-
   .rd-utility-compact-home .rd-utilityd {
-    width: 100%;
-  }
-
-  .rd-utility-compact-home .rd-utility-sum {
-    width: 100%;
+    width: auto;
   }
 
   .rd-utility-compact-home .rd-utility-menu {
-    position: static;
-    width: 100%;
-    margin-top: var(--sp-2);
-    box-shadow: none;
-  }
-
-  .rd-theme-compact-home .rd-themed-compact {
-    width: 100%;
-  }
-
-  .rd-theme-compact-sum {
-    display: inline-flex;
-    align-items: center;
-    min-height: 34px;
-  }
-
-  .rd-theme-compact-home .rd-thememenu-compact {
-    position: static;
-    width: 100%;
-    margin-top: var(--sp-2);
-    box-shadow: none;
-  }
-
-  .rd-setup-sum {
-    max-width: 144px;
-  }
-
-  .rd-setup-mark {
-    display: none;
-  }
-
-  .rd-setup-panel {
-    right: var(--sp-1);
-    left: var(--sp-1);
-    gap: var(--sp-2);
-    max-height: calc(100vh - 56px);
-    padding: var(--sp-3);
-    border-radius: 0 0 var(--r-lg) var(--r-lg);
-  }
-
-  .rd-setup-panel-head {
-    display: grid;
-    gap: var(--sp-2);
+    position: absolute;
+    width: min(340px, calc(100vw - 16px));
+    margin-top: 0;
   }
 
   .rd-refresh-health:not([hidden]) {
     max-width: none;
     width: fit-content;
-  }
-
-  .rd-journey,
-  .rd-setup-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .rd-journey-step {
-    min-height: 0;
-  }
-
-  .rd-journey-step::after {
-    top: auto;
-    right: auto;
-    bottom: calc(var(--sp-2) * -1 - 1px);
-    left: 25px;
-    width: 0;
-    height: var(--sp-2);
-    border-top: 0;
-    border-left: 1px solid var(--n-line);
-  }
-
-  .rd-capture-card {
-    grid-column: auto;
   }
 
   .rd-held-row,
@@ -20449,10 +20264,6 @@ button.rd-utility-action {
 
   .rd .rd-top > .n-environment .n-environment-compact {
     display: inline;
-  }
-
-  .rd-setup-sum {
-    max-width: 144px;
   }
 
   .rd-adddev,
@@ -20544,10 +20355,6 @@ button.rd-utility-action {
     flex: none;
   }
 
-  .rd-setup-sum {
-    max-width: 90px;
-  }
-
   .rd-adddev,
   .rd-addctrl {
     width: 32px;
@@ -20563,22 +20370,8 @@ button.rd-utility-action {
     max-width: 44px;
   }
 
-  /* Keep the native select's full option names while making the resting
-     camera pill phone-safe. The associated label remains the select's
-     accessible name; only its repeated visual word leaves the crowded rail. */
-  .rd-pathctl-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
   /* Keep the product words in the DOM for names and speech, while the visual
-     rail uses the unambiguous short verbs that fit beside setup at 390 px. */
+     rail uses unambiguous short verbs at 390 px. */
   .rd-runbtn {
     position: relative;
     width: 42px;
@@ -20644,42 +20437,49 @@ button.rd-utility-action {
   .rd .rd-top {
     gap: 1px;
   }
+
+  /* The full live sentence remains in the status node for assistive tech;
+     visually the state-colored witness dot is enough in the phone rail. */
+  .rd-live-state:not([hidden]) {
+    flex: none;
+    width: 10px;
+    max-width: 10px;
+    gap: 0;
+  }
 }
 
 @media (max-width: 440px) {
-  /* At the narrowest supported workbench width, Setup becomes the same
-     named icon treatment as Add device/controller. Its full progress remains
-     in the summary's accessible text and title, while the rail keeps every
-     lifecycle and recovery target inside its own frame. */
-  .rd-setup-sum {
-    position: relative;
+  .rd-profile-sum {
     width: 36px;
     min-width: 36px;
     max-width: 36px;
     padding: 0;
-    color: transparent;
+    justify-content: center;
   }
 
-  .rd-setup-sum > * {
-    opacity: 0;
-  }
-
-  .rd-setup-sum::after {
+  .rd-profile-word,
+  .rd-profile-sum .rd-caret {
     position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    color: var(--n-text-2);
-    content: "◆";
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .rd-profile-menu {
+    position: fixed;
+    top: 52px;
+    right: 4px;
+    left: 4px;
+    width: auto;
   }
 }
 
 @media (pointer: coarse) {
-  .rd-setup-sum,
+  .rd-profile-sum,
   .rd-runbtn,
   .rd-panel-action,
   .rd-live-retry,
-  .rd-journey-step,
   .rd-start-over > summary {
     min-height: 40px;
   }
@@ -20694,7 +20494,8 @@ button.rd-utility-action {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rd-setup-sum .rd-caret,
+  .rd-theme-home,
+  .rd-profile-sum .rd-caret,
   .rd-live-state::before {
     transition: none;
     animation: none;
@@ -20702,11 +20503,11 @@ button.rd-utility-action {
 }
 
 @media (forced-colors: active) {
-  .rd-setup-panel,
-  .rd-setup-sum,
-  .rd-journey-step,
-  .rd-setup-card,
-  .rd-session-state,
+  .rd-profile-menu,
+  .rd-profile-sum,
+  .rd-device-policy,
+  .rd-device-capture,
+  .rd-capture-recovery-sheet,
   .rd-held-row,
   .rd-capture-prepare,
   .rd-runbtn,
@@ -20715,10 +20516,8 @@ button.rd-utility-action {
   .rd-flash,
   .rd-attention,
   .rd-health-alert:not([hidden]),
-  .rd-state-badge,
   .rd-device-state,
-  .rd-dev-connectedchip,
-  .rd-dev-capturechip {
+  .rd-dev-connectedchip {
     border-color: CanvasText;
     background: Canvas;
     box-shadow: none;
@@ -20873,6 +20672,12 @@ button.rd-utility-action {
 .rd-devmodal button.n-dev:hover,
 .rd-devmodal button.n-dev:focus-visible {
   border-color: var(--n-accent-line);
+}
+
+.rd-devmodal button.n-dev[data-rd-pending],
+.rd-stagebtn[data-rd-pending],
+.rd-addpane-rescan[data-rd-pending] {
+  cursor: progress;
 }
 
 .rd-devmodal .rd-dev-word {
@@ -21093,68 +20898,446 @@ button.rd-utility-action {
   color: var(--n-text-2);
 }
 
-.rd-device-keyboard-visual {
-  position: relative;
+/* Each physical keyboard owns one full canvas surface. */
+.rd-keyboard-surface-template {
+  display: none !important;
+}
+
+.rd-keyboard-device-node .rd-keyboard-device-shell {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rd-offline-device-shell {
   box-sizing: border-box;
-  margin: 10px 0 2px;
-  padding: 7px 9px;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--n-accent-line) 76%, var(--n-line));
-  border-radius: 10px;
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.rd-offline-device-shell > .rd-devcard {
+  border: 1px solid color-mix(in srgb, var(--n-warn) 30%, var(--n-line));
+  border-radius: var(--radius-panel);
   background:
-    radial-gradient(circle at 82% 12%, color-mix(in srgb, var(--n-accent) 14%, transparent), transparent 42%),
-    linear-gradient(145deg, color-mix(in srgb, var(--n-panel-2) 88%, #000 12%), var(--n-panel));
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--n-text) 7%, transparent),
-    0 10px 26px color-mix(in srgb, #000 18%, transparent);
+    linear-gradient(110deg, color-mix(in srgb, var(--n-warn) 7%, transparent), transparent 52%),
+    var(--n-panel-2);
 }
 
-.rd-device-keyboard-visual::after {
-  position: absolute;
-  inset: auto 12px 4px;
-  height: 1px;
-  content: "";
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--n-accent) 46%, transparent), transparent);
+.rd-keyboard-device-node[data-source-state="unknown"] .rd-keyboard-device-surface-host {
+  border-color: color-mix(in srgb, var(--n-warn) 32%, var(--n-line));
 }
 
-.rd-device-keyboard-svg {
+.rd-keyboard-device-surface-host {
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 14px;
+}
+
+.rd-keyboard-device-node[data-mapping-available="false"]
+  [data-rd-keyboard-surface] .n-k {
+  --mine: color-mix(in srgb, var(--n-text-3) 46%, transparent);
+}
+
+.rd-keyboard-mapping-status {
+  margin: 0 12px 2px;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+  text-align: center;
+}
+
+.rd-keyboard-mapping-status[data-state="ready"] {
+  color: var(--n-ok);
+}
+
+.rd-keyboard-mapping-status[data-state="unavailable"] {
+  color: var(--n-warn);
+}
+
+[data-forma-canvas]
+  .rd-keyboard-device-node
+  .rd-keyboard-device-surface-host
+  > .n-widget-body[data-forma-runtime-host] {
+  min-width: 0;
+  /* The canvas item already reserves the full board footprint. */
+  min-height: 0;
+}
+
+.rd-global-source-controls-host {
+  /* Stable SSR parking place for the one session-wide editor. A user gesture
+     moves it into the invoking board; it never floats as unexplained chrome. */
+  display: none;
+}
+
+/* With scripting unavailable there is no canvas board to invoke the editor.
+   Keep the same native POST choices as a small, honest fallback instead of
+   making an unset policy a permanent Save/Play dead end. */
+.nocturne:not(.js) .rd-global-source-controls-host {
   display: block;
-  width: 100%;
-  height: auto;
-  color: var(--n-accent);
-  filter: drop-shadow(0 5px 7px color-mix(in srgb, #000 30%, transparent));
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--n-line);
+  background: var(--n-panel);
 }
 
-.rd-device-keyboard-shell {
-  fill: color-mix(in srgb, var(--n-panel) 78%, #05070b 22%);
-  stroke: color-mix(in srgb, var(--n-text-3) 38%, transparent);
-  stroke-width: 1;
+.nocturne:not(.js) .rd-global-source-controls-host .rd-boardpick-sum {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-md);
+  color: var(--n-text);
 }
 
-.rd-device-keyboard-deck {
-  fill: color-mix(in srgb, var(--n-bg) 86%, #000 14%);
-  stroke: color-mix(in srgb, var(--n-accent) 20%, var(--n-line));
-  stroke-width: 0.8;
+.nocturne:not(.js) .rd-global-source-controls-host .rd-boardpick-pop {
+  position: relative;
+  top: auto;
+  right: auto;
+  width: min(440px, 100%);
+  margin-top: var(--sp-2);
 }
 
-.rd-device-keyboard-key {
-  fill: color-mix(in srgb, var(--n-text-3) 32%, var(--n-panel-2));
-  stroke: color-mix(in srgb, var(--n-text-2) 22%, transparent);
-  stroke-width: 0.45;
+.nocturne:not(.js) .rd-global-source-controls-host .rd-policy-editor-close {
+  display: none;
 }
 
-.rd-device-keyboard-key-edge {
-  fill: color-mix(in srgb, var(--n-accent) 22%, var(--n-panel-2));
+.rd-device-operations {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.72fr);
+  gap: var(--sp-2);
+  align-items: stretch;
+  margin: 2px 8px 4px;
+  color: var(--n-text-2);
+  font-size: var(--fs-micro);
 }
 
-.rd-device-keyboard-light {
-  fill: color-mix(in srgb, var(--n-accent) 62%, transparent);
-  opacity: 0.8;
+.rd-device-operations[hidden] {
+  display: none;
 }
 
-.rd-device-keyboard-witness {
-  fill: var(--n-accent);
-  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--n-accent) 74%, transparent));
+/* Semantic overview keeps the board recognizable without pretending its
+   shrunken native controls are usable. This one chrome-layer button cancels
+   the item/camera scale, so it remains a truthful mouse and touch target. */
+.rd-device-controls-launcher-host {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: end center;
+  box-sizing: border-box;
+  padding: 0 0 14px;
+  pointer-events: none;
+}
+
+.rd-device-controls-launcher-host[hidden] {
+  display: none;
+}
+
+.rd-device-controls-launcher {
+  display: inline-flex;
+  min-width: 104px;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  border: 1px solid color-mix(in srgb, var(--n-accent) 58%, var(--n-line-2));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--n-panel) 92%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--n-bg) 70%, transparent),
+    0 8px 24px rgb(0 0 0 / 32%);
+  color: var(--n-accent-2);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+  transform: scale(var(--widget-chrome-control-scale, 1));
+  transform-origin: 50% 100%;
+}
+
+.rd-device-controls-launcher:is(:hover, :focus-visible) {
+  border-color: var(--n-accent);
+  background: color-mix(in srgb, var(--n-accent) 12%, var(--n-panel));
+  color: var(--n-text);
+  outline: none;
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--n-accent) 24%, transparent),
+    0 10px 28px rgb(0 0 0 / 36%);
+}
+
+.rd-device-policy,
+.rd-device-capture {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--n-line) 86%, transparent);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--n-panel-2) 72%, transparent);
+}
+
+.rd-device-policy {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 2px var(--sp-2);
+  align-items: center;
+  padding: 8px 10px;
+}
+
+.rd-device-policy-label {
+  grid-column: 1 / 3;
+  color: var(--n-text-3);
+  font-size: 9px;
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+.rd-device-policy strong {
+  grid-column: 1;
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+}
+
+.rd-device-policy [data-rd-policy-effect] {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--n-text-3);
+  line-height: var(--lh-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-policy-change {
+  grid-column: 3;
+  grid-row: 1 / 3;
+  align-self: stretch;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--n-line-2);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--n-accent-2);
+  font: inherit;
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rd-policy-change:hover:not(:disabled),
+.rd-policy-change:focus-visible {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-dim);
+}
+
+.rd-policy-change:disabled {
+  color: var(--n-text-3);
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+/* In a short viewport the clamped editor may need the opener's footprint.
+   Keep that one deliberate toggle above its popup so the same button can
+   always close the surface it opened. */
+.rd-policy-change[aria-expanded="true"] {
+  position: relative;
+  z-index: 46;
+}
+
+.rd-policy-editor-host {
+  position: absolute;
+  right: 8px;
+  top: calc(100% + 6px);
+  z-index: 45;
+}
+
+.rd-policy-editor-host[data-policy-placement="above"] {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+.rd-policy-editor-host > .rd-capture > summary {
+  display: none;
+}
+
+.rd-policy-editor-host .rd-boardpick-pop {
+  position: relative;
+  top: auto;
+  right: auto;
+  width: min(440px, calc(100vw - 40px), var(--rd-policy-available-width, 440px));
+  min-width: min(440px, calc(100vw - 40px), var(--rd-policy-available-width, 440px));
+  max-height: min(
+    460px,
+    calc(100vh - 100px),
+    var(--rd-policy-available-height, 460px)
+  );
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform: translate(
+    var(--rd-policy-shift-x, 0px),
+    var(--rd-policy-shift-y, 0px)
+  );
+}
+
+.rd-policy-editor-head,
+.rd-recovery-sheet-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.rd-policy-editor-head > div,
+.rd-recovery-sheet-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rd-policy-editor-head strong,
+.rd-recovery-sheet-head h2 {
+  color: var(--n-text);
+  font-size: var(--fs-sm);
+}
+
+.rd-policy-editor-head span,
+.rd-recovery-sheet-head p {
+  margin: 0;
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-policy-editor-close {
+  display: grid;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--n-line);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--n-text-2);
+  font: inherit;
+  font-size: var(--fs-lg);
+  cursor: pointer;
+}
+
+.rd-policy-editor-close:hover,
+.rd-policy-editor-close:focus-visible {
+  border-color: var(--n-accent-line);
+  color: var(--n-accent-2);
+}
+
+.rd-device-capture > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: 100%;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.rd-device-capture > summary::-webkit-details-marker {
+  display: none;
+}
+
+.rd-device-capture > summary:hover,
+.rd-device-capture > summary:focus-visible,
+.rd-device-capture[open] > summary {
+  background: var(--n-accent-dim);
+}
+
+@media (pointer: coarse), (max-width: 600px) {
+  .rd-policy-change,
+  .rd-device-capture > summary,
+  .rd-policy-editor-close {
+    min-height: 44px;
+  }
+
+  .rd-policy-editor-close {
+    min-width: 44px;
+    width: 44px;
+    height: 44px;
+    transform: scale(var(--widget-chrome-control-scale, 1));
+    transform-origin: 100% 0;
+  }
+}
+
+.rd-device-capture-label {
+  color: var(--n-text-3);
+  font-size: 9px;
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+}
+
+.rd-device-capture-state {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--n-text);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-device-capture-action {
+  color: var(--n-accent-2);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+
+.rd-device-capture[data-capture-state="attention"] .rd-device-capture-state {
+  color: var(--n-warn);
+}
+
+.rd-device-capture[data-capture-state="ready"] .rd-device-capture-state {
+  color: var(--n-ok);
+}
+
+.rd-device-capture-body {
+  display: grid;
+  gap: var(--sp-2);
+  padding: 0 10px 10px;
+  border-top: 1px solid var(--n-line);
+}
+
+.rd-device-capture:not([open]) > .rd-device-capture-body {
+  display: none;
+}
+
+.rd-device-capture-body > p {
+  margin: 8px 0 0;
+  color: var(--n-text-3);
+  line-height: var(--lh-snug);
+  text-wrap: pretty;
+}
+
+.rd-device-capture-body form {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.rd-device-capture-body .rd-panel-action {
+  justify-self: start;
+}
+
+@media (max-width: 760px) {
+  .rd-device-operations {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (pointer: coarse) {
+  .rd-device-controls-launcher {
+    min-height: 44px;
+  }
 }
 
 .rd-devcard-states {
@@ -21169,9 +21352,7 @@ button.rd-utility-action {
   text-wrap: pretty;
 }
 
-/* ── Encoder profile lab ──────────────────────────────────────────────────
-   One stable, data-driven SVG surface. Identity, topology, configured output,
-   observed input, and user declarations keep independent visual treatments. */
+/* ── Encoder profile lab ───────────────────────────────────────────────── */
 
 .rd-encoder-lab-toggle[aria-pressed="true"] {
   border-color: var(--n-accent-line);
@@ -22227,11 +22408,7 @@ button.rd-utility-action {
   }
 }
 
-/* ── The product encoder: one connected board on the workbench ───────────
-   The research lab above keeps provenance visible because that is its job.
-   This surface instead gives the person using KSX the physical nouns first:
-   board, terminal, configured key and live press. Evidence remains available
-   behind Device details, but never competes with the interactive board. */
+/* ── Product encoder: one connected board ──────────────────────────────── */
 
 .rd-encoder-device-node {
   --rd-encoder-pcb-a: color-mix(in srgb, var(--n-ok) 28%, var(--n-bg));
@@ -22257,6 +22434,16 @@ button.rd-utility-action {
   overflow: hidden;
   color: var(--n-text);
   font-family: var(--n-font);
+}
+
+/* The fixed-size board keeps its schematic stable, but an expanded safety
+   action can be taller than the remaining flex space. Scroll only for that
+   explicit operation so its consent and submit control cannot be clipped
+   below the physical board hull. */
+.rd-encoder-device-shell:has(.rd-device-capture[open]) {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 /* The ordinary device card remains in the object so staging and live roster
@@ -22728,6 +22915,24 @@ button.rd-utility-action {
   pointer-events: all;
 }
 
+/* One physical terminal may emit a normal and a shifted key. These transparent
+   geometry anchors let cords/live feedback address each emission separately
+   without inventing a second terminal or another interactive control. */
+.rd-encoder-product-flow-anchor {
+  fill: transparent;
+  pointer-events: none;
+}
+
+.rd-encoder-product-terminal:has(.rd-encoder-product-flow-anchor.live)
+  .rd-encoder-product-terminal-body {
+  stroke: var(--n-live, var(--n-ok));
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--n-live, var(--n-ok)) 68%, transparent));
+}
+
+.rd-keyboard-device-node[data-keyboard-editable="false"] [data-rd-keyboard-surface] {
+  pointer-events: none;
+}
+
 .rd-encoder-product-terminal-body {
   fill: color-mix(in srgb, var(--n-panel-3) 88%, var(--n-bg));
   stroke: color-mix(in srgb, var(--rd-encoder-terminal-accent) 48%, var(--n-line-2));
@@ -23089,15 +23294,6 @@ button.rd-encoder-product-read-inline:disabled {
   opacity: .62;
 }
 
-.rd-encoder-product-read-reason {
-  display: block;
-  max-width: 280px;
-  margin-top: var(--sp-1);
-  color: var(--n-text-3);
-  font-size: var(--fs-micro);
-  line-height: var(--lh-normal);
-}
-
 .rd-encoder-product-live {
   grid-area: live;
   display: flex;
@@ -23453,12 +23649,9 @@ button.rd-encoder-product-read-inline:disabled {
   display: none;
 }
 
-/* A transformed 960px board only meets its 44px terminal-target contract near
-   editing scale. Keep the full schematic as the structure/overview landmark,
-   but remove tiny native controls and verbose command chrome from routing and
-   layout until the host stamps this exact item as editable. */
+/* Tiny encoder controls appear only at an honest editing scale. */
 .rd-encoder-device-node[data-encoder-editable="false"]
-  :is(.rd-stageform, .rd-encoder-profile-foot),
+  .rd-encoder-profile-foot,
 .rd-encoder-device-node[data-encoder-editable="false"]
   .rd-encoder-profile[data-presentation="product"]
   :is(
@@ -23873,6 +24066,13 @@ button.rd-encoder-product-read-inline:disabled {
   display: none;
 }
 
+/* A disconnected source is still staged, but its exact-source recovery card
+   must keep the removal escape hatch available. Removing it retires only that
+   board and its routes; peers remain staged. */
+.rd-dev-node[data-device-role="offline-source"][data-staged="true"] .rd-stageform {
+  display: block;
+}
+
 /* Unknown is not unstaged. If either provider read refused, keep the last
    known card in place, show the truthful status beside the disabled action,
    and wait for an authoritative repaint. */
@@ -23882,15 +24082,14 @@ button.rd-encoder-product-read-inline:disabled {
   color: var(--n-warn);
 }
 
-/* State decides whether the chip or verb exists; semantic zoom remains the
-   final presentation authority and hides either outside editing distance. */
+/* State decides whether the chip or verb exists. Source authority is a
+   primary device action, so it remains discoverable at structure distance;
+   only overview hides it with the rest of the operational chrome. */
 .rd [data-canvas-zoom-tier="overview"] .rd-devcard-meta,
 .rd [data-canvas-zoom-tier="overview"] .rd-devcard-purpose,
 .rd [data-canvas-zoom-tier="overview"] .rd-devcard-staged,
 .rd [data-canvas-zoom-tier="overview"] .rd-stageform,
-.rd [data-canvas-zoom-tier="structure"] .rd-devcard-purpose,
-.rd [data-canvas-zoom-tier="structure"] .rd-devcard-staged,
-.rd [data-canvas-zoom-tier="structure"] .rd-stageform {
+.rd [data-canvas-zoom-tier="structure"] .rd-devcard-purpose {
   display: none;
 }
 
@@ -23932,15 +24131,12 @@ button.rd-encoder-product-read-inline:disabled {
   text-transform: uppercase;
 }
 
-.rd-dev-connectedchip,
-.rd-dev-capturechip {
+.rd-dev-connectedchip {
   display: inline-block;
   margin: 3px var(--sp-1) 0 0;
 }
 
-.rd-dev-connectedchip[hidden],
-.rd-dev-capturechip[hidden],
-.rd-dev-capturechip.none {
+.rd-dev-connectedchip[hidden] {
   display: none;
 }
 
@@ -23975,12 +24171,34 @@ button.rd-encoder-product-read-inline:disabled {
 }
 
 @media (max-width: 1050px) {
-  /* The Add catalog is the active task at this breakpoint. Its bottom tray
-     must reserve space from the canvas, not compete with the full-width
-     recovery/transport banners in the same vertical flex flow. Compact Setup
-     truth remains available; the full recovery banner returns on close. */
-  .rd.is-add-panel-open .rd-attention {
+  /* Device recovery must remain visible while the Add catalog is open, but
+     it cannot re-enter the page's flex flow: doing so subtracts its full
+     height from the already-reserved canvas and can collapse a phone-sized
+     workbench. Treat it like the transport-health toast below and anchor it
+     immediately above the tray. */
+  .rd.is-add-panel-open .rd-attention:not(.none) {
+    position: fixed;
+    right: var(--sp-3);
+    bottom: calc(var(--rd-add-panel-height) + var(--sp-3));
+    left: var(--sp-3);
+    z-index: 32;
+    grid-template-columns: minmax(0, 1fr) auto;
+    width: auto;
+    max-height: min(112px, calc(100dvh - var(--rd-add-panel-height) - 64px));
+    padding: var(--sp-2) var(--sp-3);
+    overflow: auto;
+    border: 1px solid color-mix(in srgb, var(--n-warn) 58%, var(--n-line));
+    border-radius: 12px;
+    box-shadow: 0 12px 32px color-mix(in srgb, var(--n-bg) 54%, transparent);
+  }
+
+  .rd.is-add-panel-open .rd-attention-mark {
     display: none;
+  }
+
+  .rd.is-add-panel-open .rd-attention-actions {
+    grid-column: auto;
+    justify-content: end;
   }
 
   /* Refresh transport failure is different from setup recovery: this is the
@@ -24190,13 +24408,7 @@ button.rd-encoder-product-read-inline:disabled {
   margin-left: auto;
 }
 
-/* The REAL body drawing — a CLONE of the shared inline master is the
-   widget's face (the nocturne widget's mechanism). The clone is an inline
-   <svg> with its source viewBox, so its box is intrinsic — no async load,
-   no reserved-ratio guard needed. Fully interactive like 4460's widgets:
-   every control zone carries data-fn, and clicking one jumps the inspector
-   to that binding row (pointer-events:none here was the bug that made the
-   Xbox art dead while the premium hooks' own pointer rules leaked through). */
+/* Controller cards clone the shared inline interactive SVG master. */
 .rd-ctrlcard-artwrap {
   margin: 6px 0 4px;
   user-select: none;
@@ -24547,6 +24759,7 @@ form.rd-undochip .n-undo-btn {
 }
 
 .rd-controller-color,
+.rd-controller-sources,
 .rd-binding-filter {
   display: grid;
   gap: 8px;
@@ -24554,6 +24767,41 @@ form.rd-undochip .n-undo-btn {
   border: 1px solid var(--n-line);
   border-radius: 10px;
   background: color-mix(in srgb, var(--n-panel-2) 58%, transparent);
+}
+
+.rd-controller-sources h3,
+.rd-controller-sources p {
+  margin: 0;
+}
+
+.rd-controller-sources h3 {
+  font-size: var(--fs-small);
+}
+
+.rd-controller-sources p {
+  color: var(--n-text-3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-snug);
+}
+
+.rd-controller-source-tabs {
+  display: grid;
+  gap: 6px;
+}
+
+.rd-controller-source {
+  width: 100%;
+  justify-content: flex-start;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-controller-source[aria-pressed="true"] {
+  border-color: var(--n-accent-line);
+  background: var(--n-accent-tint);
+  color: var(--n-accent-2);
 }
 
 .rd-controller-color-head h3,
@@ -24704,7 +24952,9 @@ form.rd-undochip .n-undo-btn {
 }
 
 @media (pointer: coarse) {
-  :is(.rd-theme-sum, .rd-theme-compact-sum) {
+  .rd-theme-sum {
+    width: 40px;
+    min-width: 40px;
     min-height: 40px;
   }
 

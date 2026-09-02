@@ -873,11 +873,11 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
         }, { selector: IPAC, dragDelta });
         assert.ok(edgeGeometry, "the dragged board policy remains rendered");
         assert.ok(
-          edgeGeometry.viewportBottom - edgeGeometry.policyBottom <= 120,
+          edgeGeometry.viewportBottom - edgeGeometry.boardBottom <= 120,
           // The canvas deliberately retains a screen-space rescue shelf for
-          // selected-item chrome on a 390px viewport. That shelf is still far
-          // shorter than the editor and therefore exercises its above/clamp
-          // path without dragging the device controls behind browser chrome.
+          // the selected board. A tall board can have content below its policy
+          // row, so board geometry—not one internal control—is the stable proof
+          // that the real drag reached the bottom clamp.
           `the drag did not reach the bottom-edge rescue shelf: ${JSON.stringify(edgeGeometry)}`,
         );
 
@@ -934,12 +934,12 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
           "the shared editor is attached to the exact board that opened it",
         );
         assert.equal(await opener.getAttribute("aria-expanded"), "true");
-        assert.match(
-          (await editor.locator("xpath=ancestor::*[@data-rd-policy-editor-host]").getAttribute(
+        assert.equal(
+          await editor.locator("xpath=ancestor::*[@data-rd-policy-editor-host]").getAttribute(
             "data-policy-placement",
-          )) ?? "",
-          /^(?:above|below)$/,
-          "a bottom-edge board receives an explicit clamped popup placement",
+          ),
+          "above",
+          "a bottom-edge board flips its policy popup above the remaining shelf",
         );
         const policyGroup = editor.getByRole("radiogroup", {
           name: "Input behavior while playing",

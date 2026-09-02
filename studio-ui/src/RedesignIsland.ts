@@ -3456,7 +3456,43 @@ function syncInspectorToSelection(items: HTMLElement[]): void {
 let chipsTimer = 0;
 function scheduleChips(): void {
   window.clearTimeout(chipsTimer);
+  // A stale chip must not remain clickable above moving stage chrome while
+  // this settle debounce is running. The final onCommit/onChange schedules
+  // the replacement against stationary geometry.
+  const rail = rdRoot?.querySelector<HTMLElement>(".rd-chips");
+  if (rail) {
+    rail.replaceChildren();
+  }
   chipsTimer = window.setTimeout(syncChips, 150);
+}
+
+function screenRectsOverlap(
+  left: DOMRectReadOnly,
+  right: DOMRectReadOnly,
+  clearance = 0,
+): boolean {
+  return left.left < right.right + clearance &&
+    left.right > right.left - clearance &&
+    left.top < right.bottom + clearance &&
+    left.bottom > right.top - clearance;
+}
+
+/** Proximity navigation is secondary chrome. If its delayed screen-space
+ *  placement would cover a visible move handle, the handle wins: activating
+ *  a chip at that point would fly the camera instead of moving the board.
+ *  The next camera/selection settle rebuilds the capped chip list, so a
+ *  suppressed chip returns as soon as the two controls no longer collide. */
+function suppressChipsBlockingMoveHandles(root: HTMLElement, rail: HTMLElement): void {
+  const handles = Array.from(
+    root.querySelectorAll<HTMLElement>(".widget-drag-handle"),
+  ).filter(renderedFocusTarget).map((handle) => handle.getBoundingClientRect());
+  if (handles.length === 0) return;
+  for (const chip of Array.from(rail.querySelectorAll<HTMLElement>(".rd-chip"))) {
+    const chipRect = chip.getBoundingClientRect();
+    if (handles.some((handleRect) => screenRectsOverlap(chipRect, handleRect, 8))) {
+      chip.remove();
+    }
+  }
 }
 
 function syncChips(): void {
@@ -3473,6 +3509,16 @@ function syncChips(): void {
   const viewport = root.querySelector<HTMLElement>(".forma-canvas-viewport");
   const rect = viewport?.getBoundingClientRect();
   if (!rect) return;
+  // scheduleChips is intentionally settle-debounced, but its timer can still
+  // land during a longer camera transition or held gesture. Never mint
+  // clickable screen-space chrome from that intermediate matrix. The final
+  // canvas change/commit schedules a stationary replacement.
+  if (viewport.matches(
+    ".is-camera-animating, .is-camera-moving, .is-panning, " +
+      ".is-navigating, .is-dragging-widget",
+  )) {
+    return;
+  }
   const camera = canvas.getCamera();
   const inset = inspectorInset();
   const safeWidth = rect.width - inset;
@@ -3509,7 +3555,20 @@ function syncChips(): void {
     });
   }
   offscreen.sort((a, b) => a.dist - b.dist);
-  const placed: { x: number; y: number }[] = [];
+  // Seed the chip-spread collision field with active move chrome. This keeps
+  // an off-screen shortcut available where room exists without letting that
+  // secondary control occupy the board handle's visible grab target.
+  const placed: { x: number; y: number }[] = Array.from(
+    root.querySelectorAll<HTMLElement>(
+      ".widget-instance.is-active .widget-drag-handle",
+    ),
+  ).filter(renderedFocusTarget).map((handle) => {
+    const handleRect = handle.getBoundingClientRect();
+    return {
+      x: handleRect.left + handleRect.width / 2 - rect.left,
+      y: handleRect.top + handleRect.height / 2 - rect.top,
+    };
+  });
   rail.replaceChildren(
     ...offscreen.slice(0, 4).map(({ item, name, sx, sy, dist }) => {
       const chip = document.createElement("button");
@@ -3543,6 +3602,7 @@ function syncChips(): void {
       return chip;
     }),
   );
+  suppressChipsBlockingMoveHandles(root, rail);
 }
 
 // ── Hover spotlight v0 (design handoff §6.5) ────────────────────────────────
@@ -5515,7 +5575,10 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
         scheduleSharedPolicyEditorPosition();
       },
       onCameraHistoryChange: syncBackView,
-      onSelectionChange: syncInspectorToSelection,
+      onSelectionChange: (items) => {
+        syncInspectorToSelection(items);
+        scheduleChips();
+      },
       onActiveItemStateChange: () => {
         renderInspector();
         const tier = viewport.dataset.canvasZoomTier ?? "editing";
@@ -5523,6 +5586,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
         syncEncoderEditingAccess(tier, zoom);
         syncKeyboardEditingAccess(tier, zoom);
         scheduleSharedPolicyEditorPosition();
+        scheduleChips();
       },
       // Native controls inside client-authored widgets are not Forma runtime
       // components. Enter on the move handle / Ctrl+Enter on the item still

@@ -56,6 +56,42 @@ export interface KeyboardSourceMappingProjection {
   routes: KeyboardSourceMappingRoute[];
 }
 
+/** Minimal wire shape needed to derive one board's existing routes. An
+ * unrouted source row remains useful first-bind authority elsewhere, but it
+ * must not appear as a player owned by this physical keyboard. */
+export interface KeyboardSourceMappingPad {
+  slot: number;
+  sources?: Array<{
+    source_id: string;
+    routed: boolean;
+    mapping_available: boolean;
+    controls?: KeyboardSourceMappingControl[];
+    macros?: KeyboardSourceMappingMacro[];
+  }>;
+}
+
+export function keyboardSourceMappingRoutes(
+  pads: readonly KeyboardSourceMappingPad[],
+  sourceId: string,
+): KeyboardSourceMappingRoute[] {
+  return pads.flatMap((pad) => {
+    const source = pad.sources?.find((candidate) => candidate.source_id === sourceId);
+    if (!source?.routed || source.mapping_available === false) return [];
+    return [{
+      slot: pad.slot,
+      controls: (source.controls ?? []).map((control) => ({
+        function: control.function,
+        label: control.label,
+        keys: [...control.keys],
+      })),
+      macros: (source.macros ?? []).map((macro) => ({
+        name: macro.name,
+        triggers: [...macro.triggers],
+      })),
+    }];
+  });
+}
+
 /** The persistent target placed inside each physical-keyboard canvas item. */
 export function createKeyboardSurfaceHost(document: Document): HTMLElement {
   const host = document.createElement("div");
@@ -215,6 +251,40 @@ function mappingClasses(owners: readonly number[]): string[] {
   ];
 }
 
+/** Reconcile the cloned, server-wide legend to this exact physical source.
+ * The hidden blueprint contains every staged controller, so leaving its
+ * visibility untouched makes an unrouted peer board claim mappings owned by
+ * another keyboard. The stack badge is likewise derived from this source's
+ * key ownership, never from the blueprint's aggregate board projection. */
+function syncSourceLegend(
+  surface: HTMLElement,
+  projection: KeyboardSourceMappingProjection,
+  paint: ReadonlyMap<string, KeyPaint>,
+): void {
+  const legend = surface.querySelector<HTMLElement>(".n-legend");
+  if (!legend) return;
+
+  const sourceSlots = new Set(projection.routes.map((route) => route.slot));
+  let visibleChips = 0;
+  for (const chip of Array.from(legend.querySelectorAll<HTMLElement>("[data-slot]"))) {
+    const visible = sourceSlots.has(Number(chip.dataset.slot));
+    chip.hidden = !visible;
+    if (visible) chip.removeAttribute("aria-hidden");
+    else chip.setAttribute("aria-hidden", "true");
+    if (visible) visibleChips += 1;
+  }
+
+  const hasStackedKey = [...paint.values()].some(
+    (keyPaint) => keyPaint.owners.length > BAND_KEYS.length,
+  );
+  const more = legend.querySelector<HTMLElement>(".n-lgdmore");
+  if (more) {
+    more.hidden = !hasStackedKey;
+    more.classList.toggle("none", !hasStackedKey);
+  }
+  legend.hidden = visibleChips === 0 && !hasStackedKey;
+}
+
 function paintKey(
   key: HTMLButtonElement,
   paint: KeyPaint | undefined,
@@ -284,6 +354,7 @@ export function syncKeyboardSourceMapping(
   projection: KeyboardSourceMappingProjection,
 ): void {
   const paint = mappingPaint(projection);
+  syncSourceLegend(surface, projection, paint);
   const plateKeys = Array.from(
     surface.querySelectorAll<HTMLButtonElement>(".n-kbcase button[data-key]"),
   );

@@ -80,6 +80,7 @@ import {
 import {
   createKeyboardSurfaceInstance,
   createKeyboardSurfaceHost,
+  keyboardSourceMappingRoutes,
   KEYBOARD_SURFACE_SELECTOR,
   KEYBOARD_SURFACE_TEMPLATE_BODY_SELECTOR,
   syncKeyboardSourceMapping,
@@ -4968,22 +4969,7 @@ function syncKeyboardSourceBindings(
   selector: string,
   sourceLabel: string,
 ): void {
-  const routes = rdCtrlPads.flatMap((pad) => {
-    const source = pad.sources?.find((candidate) => candidate.source_id === selector);
-    if (!source || source.mapping_available === false) return [];
-    return [{
-      slot: pad.slot,
-      controls: (source.controls ?? []).map((control) => ({
-        function: control.function,
-        label: control.label,
-        keys: [...control.keys],
-      })),
-      macros: (source.macros ?? []).map((macro) => ({
-        name: macro.name,
-        triggers: [...macro.triggers],
-      })),
-    }];
-  });
+  const routes = keyboardSourceMappingRoutes(rdCtrlPads, selector);
   syncKeyboardSourceMapping(surface, {
     sourceLabel,
     selectedSlot: Number(rdCtrlPanel?.slot_val ?? "0"),

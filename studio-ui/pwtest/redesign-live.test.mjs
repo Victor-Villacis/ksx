@@ -234,6 +234,38 @@ describe("redesign live feedback", { concurrency: false }, () => {
     assert.equal(view.status, "Live input is connected and waiting for activity.");
   });
 
+  test("empty heartbeat frames stay waiting until genuine input activity arrives", async () => {
+    await page.evaluate((session) => {
+      window.ksxLive.connect();
+      window.ksxLive.reconcileSession(session);
+    }, matchingSession);
+    await emit("open");
+
+    await emit("frame", frame());
+    let view = await snapshot();
+    assert.equal(view.state, "waiting");
+    assert.equal(view.status, "Live input is connected and waiting for activity.");
+    assert.equal(view.canvasLive, false);
+    assert.match(view.stats, /^Live · 12s · 0 events · 60 Hz$/);
+    assert.equal(
+      view.announcements.filter((line) => line === "Live input is active.").length,
+      0,
+    );
+
+    await emit("frame", frame({ slots: [{ slot: 1, hit: ["a"] }] }));
+    view = await snapshot();
+    assert.equal(view.state, "active");
+    assert.equal(view.status, "Live input is active.");
+    assert.equal(view.canvasLive, true);
+
+    await page.evaluate(() => window.ksxLive.acceptCurrentRevision());
+    assert.equal((await snapshot()).state, "waiting");
+    await emit("frame", frame({ offPanel: 1 }));
+    view = await snapshot();
+    assert.equal(view.state, "active");
+    assert.match(view.stats, /1 off-panel/);
+  });
+
   test("one EventSource paints only a matching staged session and all three visual layers", async () => {
     await page.evaluate(() => {
       window.ksxLive.connect();

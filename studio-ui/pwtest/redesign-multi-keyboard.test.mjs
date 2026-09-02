@@ -552,6 +552,21 @@ describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
         "the unused peer still has a first-bind authoring row",
       );
 
+      const visibleLegendSlots = async (slug) =>
+        keyboardNode(page, slug).locator(".n-legend [data-slot]").evaluateAll(
+          (chips) => chips.filter((chip) => !chip.hidden).map((chip) => chip.dataset.slot),
+        );
+      assert.deepEqual(
+        await visibleLegendSlots(LEFT_SLUG),
+        ["1", "2"],
+        "LEFT's board legend includes both of LEFT's routes",
+      );
+      assert.deepEqual(
+        await visibleLegendSlots(RIGHT_SLUG),
+        ["1"],
+        "RIGHT's unrouted P2 authoring row is not presented as an existing route",
+      );
+
       const sameKeyOwners = await page.locator(
         '.rd-keyboard-device-node .n-kb button.n-key[data-key="A"]',
       ).evaluateAll((keys) => keys.map((key) => ({

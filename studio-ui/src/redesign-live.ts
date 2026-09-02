@@ -231,6 +231,7 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
   let events = 0;
   let dropped = 0;
   let offPanel = 0;
+  let activityObserved = false;
   let keyTargets: KeyTarget[] | null = null;
   let functionTargets: FunctionTarget[] | null = null;
   // The wire's runtime device id is stable across a press/release; an alias
@@ -361,6 +362,7 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
     events = 0;
     dropped = 0;
     offPanel = 0;
+    activityObserved = false;
     keysDown.clear();
     selectedFunctions.clear();
     slotFunctionsDown.clear();
@@ -475,6 +477,7 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
       slotFunctionsDown.set(slotFrame.slot, downSet);
       slotFunctionHits.set(slotFrame.slot, hitSet);
       slotFunctions.set(slotFrame.slot, new Set([...downSet, ...hitSet]));
+      if (downSet.size > 0 || hitSet.size > 0) activityObserved = true;
     }
 
     const selected = Number(host.selectedSlot());
@@ -502,11 +505,14 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
         keysDown.delete(ledgerId);
       }
       events += 1;
+      activityObserved = true;
       ticker.push(`${key}${keyFrame.down === true ? "↓" : "↑"}`);
       if (ticker.length > 10) ticker.shift();
     }
     dropped += frameDropped;
-    offPanel += finiteCounter(envelope.frame.off_panel);
+    const frameOffPanel = finiteCounter(envelope.frame.off_panel);
+    offPanel += frameOffPanel;
+    if (frameOffPanel > 0) activityObserved = true;
 
     ensureTargets(scope);
     const downTokens = new Set(keysDown.values());
@@ -561,8 +567,10 @@ export function createRedesignLiveFeedback(host: RedesignLiveHost): RedesignLive
         "Live feedback has a gap. Repeat the input before relying on this trace.",
         true,
       );
-    } else {
+    } else if (activityObserved) {
       setState("active", "Live input is active.", true);
+    } else {
+      setState("waiting", "Live input is connected and waiting for activity.");
     }
   }
 

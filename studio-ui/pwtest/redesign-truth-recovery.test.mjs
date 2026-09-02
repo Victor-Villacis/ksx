@@ -977,6 +977,14 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
           const popup = document.querySelector(
             "#rd-shared-policy-editor[open] .rd-boardpick-pop",
           )?.getBoundingClientRect();
+          const host = document.querySelector(
+            "#rd-shared-policy-editor[open]",
+          )?.closest("[data-rd-policy-editor-host]");
+          const policy = host?.closest(".rd-device-policy");
+          const board = host?.closest(".rd-dev-node");
+          const hostStyle = host instanceof HTMLElement ? getComputedStyle(host) : null;
+          const policyRect = policy?.getBoundingClientRect();
+          const boardRect = board?.getBoundingClientRect();
           const chosenButton = document.querySelector(
             '#rd-shared-policy-editor[open] form button[role="radio"][aria-checked="true"]',
           );
@@ -1007,6 +1015,25 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
                   right: popup.right,
                   bottom: popup.bottom,
                 },
+                policy: policyRect && {
+                  left: policyRect.left,
+                  top: policyRect.top,
+                  right: policyRect.right,
+                  bottom: policyRect.bottom,
+                  offsetWidth: policy instanceof HTMLElement ? policy.offsetWidth : null,
+                },
+                board: boardRect && {
+                  left: boardRect.left,
+                  top: boardRect.top,
+                  right: boardRect.right,
+                  bottom: boardRect.bottom,
+                },
+                placement: host?.getAttribute("data-policy-placement"),
+                shiftX: hostStyle?.getPropertyValue("--rd-policy-shift-x"),
+                shiftY: hostStyle?.getPropertyValue("--rd-policy-shift-y"),
+                availableWidth: hostStyle?.getPropertyValue("--rd-policy-available-width"),
+                stageTransform: document.querySelector(".forma-canvas-stage")?.getAttribute("style"),
+                cameraAnimating: Boolean(document.querySelector(".is-camera-animating")),
                 chosenIsPainted: Boolean(
                   chosenButton && painted &&
                     (chosenButton === painted || chosenButton.contains(painted)),
@@ -1023,7 +1050,7 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
             geometry.popup.right <= geometry.viewport.right + 1 &&
             geometry.popup.top >= geometry.viewport.top - 1 &&
             geometry.popup.bottom <= geometry.viewport.bottom + 1,
-          `the ${viewportSize.width}px policy popup stays within the clipped canvas viewport`,
+          `the ${viewportSize.width}px policy popup stays within the clipped canvas viewport: ${JSON.stringify(geometry)}`,
         );
         assert.equal(
           geometry.chosenIsPainted,

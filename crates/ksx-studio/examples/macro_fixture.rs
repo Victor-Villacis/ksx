@@ -263,6 +263,10 @@ struct Store {
     /// `Some(generation)` while the scripted learner is "listening"; the next
     /// poll answers with a hit on the fixture I-PAC and clears it.
     listening: Arc<Mutex<Option<u64>>>,
+    /// Daemon generations do not rewind after cancellation. Keep the fixture
+    /// equally truthful so navigation regressions can prove a fresh listener
+    /// was acquired rather than mistaking a reused `1` for progress.
+    learn_sequence: Arc<AtomicUsize>,
 }
 
 impl Store {
@@ -301,6 +305,7 @@ impl Store {
             stage: Arc::new(Mutex::new(seeded.clone().unwrap_or_default())),
             saved_stage: Arc::new(Mutex::new(seeded)),
             listening: Arc::new(Mutex::new(None)),
+            learn_sequence: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -738,7 +743,7 @@ impl ControlSource for Store {
     /// (listen → resolve → stage) against this double.
     fn learn_start(&self) -> ksx_api::LearnView {
         let mut listening = self.listening.lock().unwrap();
-        let generation = listening.map_or(1, |generation| generation + 1);
+        let generation = self.learn_sequence.fetch_add(1, Ordering::SeqCst) as u64 + 1;
         *listening = Some(generation);
         ksx_api::LearnView {
             ok: true,

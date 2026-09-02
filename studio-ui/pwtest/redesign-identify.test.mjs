@@ -23,6 +23,10 @@ const targetDir = process.env.CARGO_TARGET_DIR
   : path.join(repoRoot, "target");
 const IPAC = "usb:d209:0430:00";
 const G915 = "usb:046d:c545:00";
+const ABANDONED_IDENTIFY_KEY = "ksx-redesign-identify-abandoned-attempt";
+const FENCED_LIFECYCLE_SELECTOR =
+  '[data-rd-form="save"] button[type="submit"], ' +
+  '[data-rd-form="play"] button[type="submit"]';
 
 let server;
 let holdServer;
@@ -83,6 +87,33 @@ async function within(promise, timeoutMs, message) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function waitForListeningGeneration(base, previous = null, deadlineMs = 15_000) {
+  const until = Date.now() + deadlineMs;
+  for (;;) {
+    const view = await fetch(`${base}/api/learn`).then((response) => response.json());
+    if (
+      view.state === "listening" &&
+      Number.isInteger(view.generation) &&
+      view.generation !== previous
+    ) {
+      return view.generation;
+    }
+    if (Date.now() > until) {
+      throw new Error(`fixture did not acquire a new learner generation on ${base}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function lifecycleFenceSnapshot(page) {
+  return page.locator(FENCED_LIFECYCLE_SELECTOR).evaluateAll((buttons) =>
+    buttons.map((button) => ({
+      kind: button.closest("form")?.getAttribute("data-rd-form") ?? "",
+      disabled: button.disabled,
+    }))
+  );
 }
 
 function assertNoUnexpectedNoise(page, allowed) {
@@ -347,10 +378,11 @@ describe("redesign identify by key", () => {
       });
 
       await page.click('[data-nx="rd-devs-open"]');
-      await page.getByRole("button", {
+      const action = page.getByRole("button", {
         name: "Identify exact device",
         exact: true,
-      }).click();
+      });
+      await action.click();
       await within(
         refreshStarted,
         15_000,
@@ -369,6 +401,11 @@ describe("redesign identify by key", () => {
         await page.locator("[data-rd-identify-cancel]").isHidden(),
         true,
         "Cancel remained offered after the answer committed",
+      );
+      assert.equal(
+        await action.isDisabled(),
+        true,
+        "Identify re-enabled before the answer's authority repaint settled",
       );
 
       await page.keyboard.press("Escape");
@@ -665,7 +702,11 @@ describe("redesign identify by key", () => {
     await resetStagedSources(HOLD_BASE);
     await stage(HOLD_BASE, G915, "g915", "Logitech G915 TKL");
     const page = await openRedesign(HOLD_BASE);
+    let releaseCleanup;
+    let releaseAuthority;
     try {
+      const lifecycleBaseline = await lifecycleFenceSnapshot(page);
+      assert.ok(lifecycleBaseline.length > 0, "the fixture exposed no Save or Play action");
       await page.click('[data-nx="rd-devs-open"]');
       await page.getByRole("button", {
         name: "Identify exact device",
@@ -673,11 +714,68 @@ describe("redesign identify by key", () => {
       }).click();
       await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
 
-      // A pagehide beacon can be owned by the service worker/navigation after
-      // this Page has detached, so Playwright is not guaranteed a Page-level
-      // response event. Assert the product consequence instead: the server
-      // must release the exact lease before the next attempt can remain live.
+      const firstGeneration = await waitForListeningGeneration(HOLD_BASE);
+      // Deterministically reproduce the browser race: claim the unload beacon
+      // was queued without delivering it. The next document must recover the
+      // exact nonce through sessionStorage before it starts another listener.
+      await page.evaluate(() => {
+        Object.defineProperty(navigator, "sendBeacon", {
+          configurable: true,
+          value: (url) =>
+            new URL(String(url), window.location.href).pathname ===
+              "/redesign/device/identify/cancel",
+        });
+      });
+
       await page.goto(`${HOLD_BASE}/check`, { waitUntil: "domcontentloaded" });
+      const abandonedAttempt = await page.evaluate(
+        (key) => sessionStorage.getItem(key),
+        ABANDONED_IDENTIFY_KEY,
+      );
+      assert.match(abandonedAttempt ?? "", /^[a-f0-9]{32}$/);
+
+      const handoffRequests = [];
+      page.on("request", (request) => {
+        if (request.method() !== "POST") return;
+        const pathname = new URL(request.url()).pathname;
+        if (!pathname.startsWith("/redesign/device/identify")) return;
+        const body = new URLSearchParams(request.postData() ?? "");
+        handoffRequests.push({ pathname, attempt: body.get("attempt") });
+      });
+      let reportCleanupSeen;
+      const cleanupSeen = new Promise((resolve) => {
+        reportCleanupSeen = resolve;
+      });
+      const cleanupGate = new Promise((resolve) => {
+        releaseCleanup = resolve;
+      });
+      let cleanupReleased = false;
+      await page.route(`${HOLD_BASE}/redesign/device/identify/cancel`, async (route) => {
+        const body = new URLSearchParams(route.request().postData() ?? "");
+        if (body.get("attempt") === abandonedAttempt) {
+          reportCleanupSeen();
+          await cleanupGate;
+        }
+        await route.continue();
+      });
+      let reportAuthoritySeen;
+      const authoritySeen = new Promise((resolve) => {
+        reportAuthoritySeen = resolve;
+      });
+      const authorityGate = new Promise((resolve) => {
+        releaseAuthority = resolve;
+      });
+      let authorityHeld = false;
+      await page.route(`${HOLD_BASE}/api/redesign*`, async (route) => {
+        if (!cleanupReleased || authorityHeld) {
+          await route.continue();
+          return;
+        }
+        authorityHeld = true;
+        reportAuthoritySeen();
+        await authorityGate;
+        await route.continue();
+      });
 
       await page.goto(`${HOLD_BASE}/redesign`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
@@ -685,16 +783,107 @@ describe("redesign identify by key", () => {
         null,
         { timeout: 20_000 },
       );
+      await within(
+        cleanupSeen,
+        15_000,
+        "the restored document never began exact-nonce cleanup",
+      );
+      const rescan = page.locator('[data-nx="rd-rescan"]');
+      assert.equal(
+        await rescan.isDisabled(),
+        true,
+        "hydration cleanup left Rescan available before exact cancellation settled",
+      );
+      assert.ok(
+        (await lifecycleFenceSnapshot(page)).every((action) => action.disabled),
+        "hydration cleanup did not fence every Save and Play action",
+      );
       await page.click('[data-nx="rd-devs-open"]');
       const retry = page.getByRole("button", {
         name: "Identify exact device",
         exact: true,
       });
+      const deviceToggle = page.locator('[data-nx="rd-dev-toggle"]').first();
+      assert.equal(
+        await retry.isDisabled(),
+        true,
+        "hydration cleanup left Identify available before exact cancellation settled",
+      );
+      assert.equal(
+        await deviceToggle.isDisabled(),
+        true,
+        "hydration cleanup left device placement available before exact cancellation settled",
+      );
+      cleanupReleased = true;
+      releaseCleanup();
+      await within(
+        authoritySeen,
+        15_000,
+        "exact-nonce cleanup never reached its authority repaint",
+      );
+      await page.locator('[data-rd-identify-status][data-state="resolving"]').waitFor();
+      assert.equal(await rescan.isDisabled(), true);
+      assert.ok((await lifecycleFenceSnapshot(page)).every((action) => action.disabled));
+      assert.equal(await retry.isDisabled(), true);
+      assert.equal(await deviceToggle.isDisabled(), true);
+      assert.equal(
+        handoffRequests.some((entry) => entry.pathname === "/redesign/device/identify"),
+        false,
+        "Identify started while abandoned exact-nonce cleanup was still pending",
+      );
+      const retiredBeforeRetry = await fetch(`${HOLD_BASE}/api/learn`).then((response) =>
+        response.json()
+      );
+      assert.equal(retiredBeforeRetry.state, "idle");
+      assert.equal(retiredBeforeRetry.generation, null);
+
+      releaseAuthority();
+      await page.locator('[data-rd-identify-status][data-state="idle"]').waitFor();
+      assert.equal(
+        handoffRequests.some((entry) => entry.pathname === "/redesign/device/identify"),
+        false,
+        "the pre-navigation click resumed into a listener without a new user action",
+      );
+      assert.equal(
+        await page.evaluate((key) => sessionStorage.getItem(key), ABANDONED_IDENTIFY_KEY),
+        null,
+      );
+      assert.equal(await rescan.isEnabled(), true);
+      assert.deepEqual(await lifecycleFenceSnapshot(page), lifecycleBaseline);
+      assert.equal(await retry.isEnabled(), true);
+      assert.equal(await deviceToggle.isEnabled(), true);
       await retry.click();
       const listening = page.locator('[data-rd-identify-status][data-state="listening"]');
       await listening.waitFor();
-      await page.waitForTimeout(250);
-      assert.equal(await listening.count(), 1, "the abandoned listener left the next attempt Busy");
+      const secondGeneration = await waitForListeningGeneration(HOLD_BASE, firstGeneration);
+      assert.notEqual(
+        secondGeneration,
+        firstGeneration,
+        "the fixture reused the abandoned generation",
+      );
+      assert.equal(await listening.count(), 1, "the recovered listener did not remain live");
+      assert.equal(
+        await page.evaluate((key) => sessionStorage.getItem(key), ABANDONED_IDENTIFY_KEY),
+        null,
+      );
+
+      const cleanupIndex = handoffRequests.findIndex((entry) =>
+        entry.pathname === "/redesign/device/identify/cancel" &&
+        entry.attempt === abandonedAttempt
+      );
+      const nextStartIndex = handoffRequests.findIndex((entry) =>
+        entry.pathname === "/redesign/device/identify" &&
+        entry.attempt !== abandonedAttempt
+      );
+      assert.notEqual(
+        cleanupIndex,
+        -1,
+        "the next document never retired the abandoned exact nonce",
+      );
+      assert.ok(
+        nextStartIndex > cleanupIndex,
+        "the new Identify request overtook the abandoned exact-nonce cleanup",
+      );
       await page.keyboard.press("Escape");
       await page.locator('[data-rd-identify-status][data-state="cancelled"]').waitFor({
         timeout: 15_000,
@@ -704,6 +893,455 @@ describe("redesign identify by key", () => {
       const current = [...payload.devices.keyboards, ...payload.devices.encoders]
         .find((row) => row.aria_current === "true");
       assert.equal(current?.selector, G915, "navigation cleanup changed the mapping input");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      releaseCleanup?.();
+      releaseAuthority?.();
+      await page.unrouteAll({ behavior: "wait" });
+      await page.close();
+    }
+  });
+
+  test("a failed navigation cleanup keeps its exact nonce and retries before listening", async () => {
+    await resetStagedSources(HOLD_BASE);
+    await stage(HOLD_BASE, G915, "g915", "Logitech G915 TKL");
+    const page = await openRedesign(HOLD_BASE);
+    let releaseFailure;
+    let releaseRetryCleanup;
+    try {
+      const lifecycleBaseline = await lifecycleFenceSnapshot(page);
+      assert.ok(lifecycleBaseline.length > 0, "the fixture exposed no Save or Play action");
+      await page.click('[data-nx="rd-devs-open"]');
+      await page.getByRole("button", {
+        name: "Identify exact device",
+        exact: true,
+      }).click();
+      await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
+      const firstGeneration = await waitForListeningGeneration(HOLD_BASE);
+      await page.evaluate(() => {
+        Object.defineProperty(navigator, "sendBeacon", {
+          configurable: true,
+          value: (url) =>
+            new URL(String(url), window.location.href).pathname ===
+              "/redesign/device/identify/cancel",
+        });
+      });
+      await page.goto(`${HOLD_BASE}/check`, { waitUntil: "domcontentloaded" });
+      const abandonedAttempt = await page.evaluate(
+        (key) => sessionStorage.getItem(key),
+        ABANDONED_IDENTIFY_KEY,
+      );
+      assert.match(abandonedAttempt ?? "", /^[a-f0-9]{32}$/);
+
+      const starts = [];
+      page.on("request", (request) => {
+        if (
+          request.method() === "POST" &&
+          new URL(request.url()).pathname === "/redesign/device/identify"
+        ) starts.push(request.postData());
+      });
+      let reportCleanupSeen;
+      const cleanupSeen = new Promise((resolve) => {
+        reportCleanupSeen = resolve;
+      });
+      const failureGate = new Promise((resolve) => {
+        releaseFailure = resolve;
+      });
+      await page.route(`${HOLD_BASE}/redesign/device/identify/cancel`, async (route) => {
+        const body = new URLSearchParams(route.request().postData() ?? "");
+        if (body.get("attempt") !== abandonedAttempt) {
+          await route.continue();
+          return;
+        }
+        reportCleanupSeen();
+        await failureGate;
+        await route.abort("failed");
+      });
+
+      await page.goto(`${HOLD_BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await within(cleanupSeen, 15_000, "the foreground cleanup was never attempted");
+      await page.click('[data-nx="rd-devs-open"]');
+      const retry = page.getByRole("button", {
+        name: "Identify exact device",
+        exact: true,
+      });
+      assert.equal(await retry.isDisabled(), true);
+      assert.equal(await page.locator('[data-nx="rd-rescan"]').isDisabled(), true);
+      assert.ok(
+        (await lifecycleFenceSnapshot(page)).every((action) => action.disabled),
+        "hydration cleanup did not fence every Save and Play action",
+      );
+      assert.equal(await page.locator('[data-nx="rd-dev-toggle"]').first().isDisabled(), true);
+      await page.locator('[data-rd-identify-status][data-state="resolving"]').waitFor();
+      releaseFailure();
+
+      const error = page.locator('[data-rd-identify-status][data-state="error"]');
+      await error.waitFor();
+      assert.match((await error.textContent()) ?? "", /previous listener still needs attention/i);
+      assert.deepEqual(await lifecycleFenceSnapshot(page), lifecycleBaseline);
+      assert.equal(starts.length, 0, "cleanup failure still opened a new listener");
+      assert.equal(
+        await page.evaluate((key) => sessionStorage.getItem(key), ABANDONED_IDENTIFY_KEY),
+        abandonedAttempt,
+        "failed cleanup forgot the only exact owner available for retry",
+      );
+      const stillListening = await fetch(`${HOLD_BASE}/api/learn`).then((response) =>
+        response.json()
+      );
+      assert.equal(stillListening.generation, firstGeneration);
+
+      await page.unrouteAll({ behavior: "wait" });
+      let reportRetryCleanupSeen;
+      const retryCleanupSeen = new Promise((resolve) => {
+        reportRetryCleanupSeen = resolve;
+      });
+      const retryCleanupGate = new Promise((resolve) => {
+        releaseRetryCleanup = resolve;
+      });
+      await page.route(`${HOLD_BASE}/redesign/device/identify/cancel`, async (route) => {
+        const body = new URLSearchParams(route.request().postData() ?? "");
+        if (body.get("attempt") === abandonedAttempt) {
+          reportRetryCleanupSeen();
+          await retryCleanupGate;
+        }
+        await route.continue();
+      });
+      await retry.click();
+      await within(
+        retryCleanupSeen,
+        15_000,
+        "the explicit retry never resumed exact-nonce cleanup",
+      );
+      await page.locator('[data-rd-identify-status][data-state="resolving"]').waitFor();
+      await page.evaluate(() => {
+        window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
+        window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+      });
+      assert.equal(
+        await page.locator('[data-nx="rd-rescan"]').isDisabled(),
+        true,
+        "BFCache recovery released the inherited preflight mutation lock",
+      );
+      assert.ok((await lifecycleFenceSnapshot(page)).every((action) => action.disabled));
+      releaseRetryCleanup();
+      await page.locator('[data-rd-identify-status][data-state="idle"]').waitFor();
+      assert.equal(
+        starts.length,
+        0,
+        "the pre-BFCache click resumed into a listener without a new user action",
+      );
+      assert.equal(
+        await page.evaluate((key) => sessionStorage.getItem(key), ABANDONED_IDENTIFY_KEY),
+        null,
+      );
+      assert.deepEqual(await lifecycleFenceSnapshot(page), lifecycleBaseline);
+      await retry.click();
+      await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
+      const secondGeneration = await waitForListeningGeneration(HOLD_BASE, firstGeneration);
+      assert.notEqual(secondGeneration, firstGeneration);
+      assert.equal(starts.length, 1, "retry did not open exactly one new listener");
+      assert.equal(
+        await page.evaluate((key) => sessionStorage.getItem(key), ABANDONED_IDENTIFY_KEY),
+        null,
+      );
+      await page.keyboard.press("Escape");
+      await page.locator('[data-rd-identify-status][data-state="cancelled"]').waitFor({
+        timeout: 15_000,
+      });
+      assertNoUnexpectedNoise(page, [/Failed to load resource: net::ERR_FAILED/]);
+    } finally {
+      releaseFailure?.();
+      releaseRetryCleanup?.();
+      await page.unrouteAll({ behavior: "wait" });
+      await page.close();
+    }
+  });
+
+  test("a BFCache restore after failed hydration cleanup reacquires the island fence", async () => {
+    await resetStagedSources(HOLD_BASE);
+    await stage(HOLD_BASE, G915, "g915", "Logitech G915 TKL");
+    const page = await openRedesign(HOLD_BASE);
+    let releaseFailure;
+    let releaseRecovery;
+    try {
+      const lifecycleBaseline = await lifecycleFenceSnapshot(page);
+      assert.ok(lifecycleBaseline.length > 0, "the fixture exposed no Save or Play action");
+      await page.click('[data-nx="rd-devs-open"]');
+      await page.getByRole("button", {
+        name: "Identify exact device",
+        exact: true,
+      }).click();
+      await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
+      const firstGeneration = await waitForListeningGeneration(HOLD_BASE);
+      await page.evaluate(() => {
+        Object.defineProperty(navigator, "sendBeacon", {
+          configurable: true,
+          value: (url) =>
+            new URL(String(url), window.location.href).pathname ===
+              "/redesign/device/identify/cancel",
+        });
+      });
+      await page.goto(`${HOLD_BASE}/check`, { waitUntil: "domcontentloaded" });
+      const abandonedAttempt = await page.evaluate(
+        (key) => sessionStorage.getItem(key),
+        ABANDONED_IDENTIFY_KEY,
+      );
+      assert.match(abandonedAttempt ?? "", /^[a-f0-9]{32}$/);
+
+      const starts = [];
+      page.on("request", (request) => {
+        if (
+          request.method() === "POST" &&
+          new URL(request.url()).pathname === "/redesign/device/identify"
+        ) starts.push(request.postData());
+      });
+      let reportFailureSeen;
+      const failureSeen = new Promise((resolve) => {
+        reportFailureSeen = resolve;
+      });
+      const failureGate = new Promise((resolve) => {
+        releaseFailure = resolve;
+      });
+      let reportRecoverySeen;
+      const recoverySeen = new Promise((resolve) => {
+        reportRecoverySeen = resolve;
+      });
+      const recoveryGate = new Promise((resolve) => {
+        releaseRecovery = resolve;
+      });
+      let firstCleanup = true;
+      await page.route(`${HOLD_BASE}/redesign/device/identify/cancel`, async (route) => {
+        const body = new URLSearchParams(route.request().postData() ?? "");
+        if (body.get("attempt") !== abandonedAttempt) {
+          await route.continue();
+          return;
+        }
+        if (firstCleanup) {
+          firstCleanup = false;
+          reportFailureSeen();
+          await failureGate;
+          await route.abort("failed");
+          return;
+        }
+        reportRecoverySeen();
+        await recoveryGate;
+        await route.continue();
+      });
+
+      await page.goto(`${HOLD_BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await within(failureSeen, 15_000, "hydration cleanup never reached the failure gate");
+      await page.click('[data-nx="rd-devs-open"]');
+      releaseFailure();
+      await page.locator('[data-rd-identify-status][data-state="error"]').waitFor();
+      assert.equal(
+        await page.evaluate((key) => sessionStorage.getItem(key), ABANDONED_IDENTIFY_KEY),
+        abandonedAttempt,
+      );
+      assert.equal(await page.locator('[data-nx="rd-rescan"]').isEnabled(), true);
+      assert.deepEqual(await lifecycleFenceSnapshot(page), lifecycleBaseline);
+
+      await page.evaluate(() => {
+        window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
+        window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+      });
+      await within(
+        recoverySeen,
+        15_000,
+        "BFCache recovery did not retry the failed exact-nonce cleanup",
+      );
+      await page.locator('[data-rd-identify-status][data-state="resolving"]').waitFor();
+      assert.equal(
+        await page.locator('[data-nx="rd-rescan"]').isDisabled(),
+        true,
+        "BFCache retry left Rescan available without an inherited identify lease",
+      );
+      assert.ok(
+        (await lifecycleFenceSnapshot(page)).every((action) => action.disabled),
+        "BFCache retry did not fence every Save and Play action",
+      );
+      const retry = page.getByRole("button", {
+        name: "Identify exact device",
+        exact: true,
+      });
+      assert.equal(await retry.isDisabled(), true);
+      assert.equal(await page.locator('[data-nx="rd-dev-toggle"]').first().isDisabled(), true);
+      assert.equal(starts.length, 0, "BFCache cleanup opened a listener without user intent");
+
+      releaseRecovery();
+      await page.locator('[data-rd-identify-status][data-state="idle"]').waitFor();
+      assert.equal(
+        await page.evaluate((key) => sessionStorage.getItem(key), ABANDONED_IDENTIFY_KEY),
+        null,
+      );
+      assert.equal(await page.locator('[data-nx="rd-rescan"]').isEnabled(), true);
+      assert.deepEqual(await lifecycleFenceSnapshot(page), lifecycleBaseline);
+      assert.equal(await retry.isEnabled(), true);
+      assert.equal(await page.locator('[data-nx="rd-dev-toggle"]').first().isEnabled(), true);
+      assert.equal(starts.length, 0, "BFCache cleanup implicitly restarted identification");
+      const learner = await fetch(`${HOLD_BASE}/api/learn`).then((response) => response.json());
+      assert.equal(learner.state, "idle");
+      assert.equal(learner.generation, null);
+      assert.notEqual(firstGeneration, null);
+      assertNoUnexpectedNoise(page, [/Failed to load resource: net::ERR_FAILED/]);
+    } finally {
+      releaseFailure?.();
+      releaseRecovery?.();
+      await page.unrouteAll({ behavior: "wait" });
+      await page.close();
+    }
+  });
+
+  test("a BFCache restore replaces its dead listening UI with recovered truth", async () => {
+    await resetStagedSources(HOLD_BASE);
+    await stage(HOLD_BASE, G915, "g915", "Logitech G915 TKL");
+    const page = await openRedesign(HOLD_BASE);
+    let releaseRecovery;
+    try {
+      await page.click('[data-nx="rd-devs-open"]');
+      const action = page.getByRole("button", {
+        name: "Identify exact device",
+        exact: true,
+      });
+      await action.click();
+      await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
+      await waitForListeningGeneration(HOLD_BASE);
+      let reportRecoverySeen;
+      const recoverySeen = new Promise((resolve) => {
+        reportRecoverySeen = resolve;
+      });
+      const recoveryGate = new Promise((resolve) => {
+        releaseRecovery = resolve;
+      });
+      await page.route(`${HOLD_BASE}/redesign/device/identify/cancel`, async (route) => {
+        reportRecoverySeen();
+        await recoveryGate;
+        await route.continue();
+      });
+      await page.evaluate(() => {
+        Object.defineProperty(navigator, "sendBeacon", {
+          configurable: true,
+          value: (url) =>
+            new URL(String(url), window.location.href).pathname ===
+              "/redesign/device/identify/cancel",
+        });
+        window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
+        window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+      });
+      await within(recoverySeen, 15_000, "BFCache recovery never sent its exact cleanup");
+      const restoring = page.locator('[data-rd-identify-status][data-state="resolving"]');
+      await restoring.waitFor();
+      await page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }));
+      assert.equal(
+        await page.locator(".rd-devmodal").getAttribute("data-rd-identify-pending"),
+        "true",
+        "the aborted old request removed the restored document's pending fence",
+      );
+      assert.equal(await action.isDisabled(), true);
+      assert.equal(
+        await restoring.evaluate((element) => element === document.activeElement),
+        true,
+        "the aborted old request moved focus away from recovery status",
+      );
+      assert.equal(
+        await page.locator('[data-nx="rd-rescan"]').isDisabled(),
+        true,
+        "BFCache recovery released the inherited island mutation lock",
+      );
+      const fit = page.locator('button.n-autobtn[data-nx="canvas-fit"]');
+      await fit.focus();
+      assert.equal(await fit.evaluate((element) => element === document.activeElement), true);
+      releaseRecovery();
+
+      const recovered = page.locator('[data-rd-identify-status][data-state="idle"]');
+      await recovered.waitFor({ timeout: 15_000 });
+      assert.match((await recovered.textContent()) ?? "", /previous exact listener is stopped/i);
+      assert.equal(
+        await page.locator("[data-rd-identify-cancel]").isHidden(),
+        true,
+        "the restored document left a dead Cancel control visible",
+      );
+      assert.equal(await fit.evaluate((element) => element === document.activeElement), true);
+      assert.notEqual(
+        await page.locator(".rd-devmodal").getAttribute("data-rd-identify-pending"),
+        "true",
+      );
+      assert.equal(
+        await page.evaluate((key) => sessionStorage.getItem(key), ABANDONED_IDENTIFY_KEY),
+        null,
+      );
+      const learner = await fetch(`${HOLD_BASE}/api/learn`).then((response) => response.json());
+      assert.equal(learner.state, "idle");
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      releaseRecovery?.();
+      await page.unrouteAll({ behavior: "wait" });
+      await page.close();
+    }
+  });
+
+  test("an abandoned answer refreshes authority before its nonce is forgotten", async () => {
+    await resetStagedSources(BASE);
+    await stage(BASE, G915, "g915", "Logitech G915 TKL");
+    const page = await openRedesign(BASE);
+    try {
+      let attempt = "";
+      page.on("request", (request) => {
+        if (
+          request.method() === "POST" &&
+          new URL(request.url()).pathname === "/redesign/device/identify"
+        ) {
+          attempt = new URLSearchParams(request.postData() ?? "").get("attempt") ?? "";
+        }
+      });
+      await page.click('[data-nx="rd-devs-open"]');
+      await page.getByRole("button", {
+        name: "Identify exact device",
+        exact: true,
+      }).click();
+      await page.locator('[data-rd-identify-status][data-state="identified"]').waitFor({
+        timeout: 15_000,
+      });
+      assert.match(attempt, /^[a-f0-9]{32}$/);
+      // Recreate the next-document cleanup after the original response has
+      // fully retired. This uses the real server tombstone; a mocked redirect
+      // cannot prove that completed answers remain distinguishable from
+      // Cancel-before-Start.
+      await page.evaluate(
+        ({ key, value }) => sessionStorage.setItem(key, value),
+        { key: ABANDONED_IDENTIFY_KEY, value: attempt },
+      );
+      let authorityReads = 0;
+      page.on("request", (request) => {
+        if (new URL(request.url()).pathname === "/api/redesign") authorityReads += 1;
+      });
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-rd-identify-status]")?.dataset.state === "identified",
+        null,
+        { timeout: 15_000 },
+      );
+      const recovered = page.locator('[data-rd-identify-status][data-state="identified"]');
+      assert.match((await recovered.textContent()) ?? "", /previous keyboard check finished/i);
+      assert.ok(authorityReads >= 1, "already-answered cleanup skipped its authority repaint");
+      assert.equal(
+        await page.evaluate((key) => sessionStorage.getItem(key), ABANDONED_IDENTIFY_KEY),
+        null,
+        "the exact nonce remained after its answer and current authority were both confirmed",
+      );
+      assert.match(await page.locator(".rd-flash").textContent(), /mapping sources are now up to date/i);
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();

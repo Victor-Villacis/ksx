@@ -961,6 +961,63 @@ describe("the device workbench", () => {
       "confirming one board never changes its unresolved twin");
     assert.equal(radioAudit.secondChecked, 0,
       "the unresolved twin retains no cross-widget native selection");
+
+    const manualFocusAudit = await page.evaluate(async () => {
+      const root = document.createElement("div");
+      root.style.position = "fixed";
+      root.style.inset = "0";
+      root.style.zIndex = "2147483646";
+      const surfaces = ["a", "b"].map((suffix) =>
+        window.KsxEncoderProductSimulation.createEncoderWorkbenchSurface(document, {
+          selector: `simulation:unknown:${suffix}`,
+          name: `Unknown encoder ${suffix.toUpperCase()}`,
+          backend: {
+            role: "panel-encoder", profileState: "unrecognised",
+            capabilities: { canReadChart: false },
+          },
+        })
+      );
+      surfaces.forEach((surface, index) => {
+        const host = document.createElement("section");
+        host.dataset.manualFocusSurface = index === 0 ? "a" : "b";
+        host.append(surface.content);
+        root.append(host);
+      });
+      document.body.append(root);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const inputFor = (id) => root.querySelector(
+        `[data-manual-focus-surface="${id}"] [data-rd-encoder-manual-labels]`,
+      );
+      const first = inputFor("a");
+      const second = inputFor("b");
+      first.value = "P1 UP, P1 FIRE";
+      first.dispatchEvent(new Event("input", { bubbles: true }));
+      second.value = "P2 LEFT, P2 RIGHT";
+      second.dispatchEvent(new Event("input", { bubbles: true }));
+      first.focus();
+      first.setSelectionRange(5, 5);
+      window.dispatchEvent(new Event("pageshow"));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const firstAfter = inputFor("a");
+      const secondAfter = inputFor("b");
+      const result = {
+        active: document.activeElement === firstAfter
+          ? "a"
+          : document.activeElement === secondAfter ? "b" : "elsewhere",
+        firstValue: firstAfter?.value,
+        secondValue: secondAfter?.value,
+        firstSelection: [firstAfter?.selectionStart, firstAfter?.selectionEnd],
+      };
+      surfaces.forEach((surface) => surface.dispose());
+      root.remove();
+      return result;
+    });
+    assert.deepEqual(manualFocusAudit, {
+      active: "a",
+      firstValue: "P1 UP, P1 FIRE",
+      secondValue: "P2 LEFT, P2 RIGHT",
+      firstSelection: [5, 5],
+    }, "a generic encoder repaint never transfers its draft focus to another board");
     assert.deepEqual(page.ksxNoise, [], "the complete product simulation remains error-free");
     await closePage(page);
   });
@@ -1735,10 +1792,13 @@ describe("the device workbench", () => {
       const labels = node.locator("[data-rd-encoder-manual-labels]");
       const draft = "P1 UP, P1 FIRE, COIN";
       await labels.fill(draft);
-      await labels.evaluate((input) => {
+      await labels.evaluate(async (input) => {
         input.focus();
         input.setSelectionRange(7, 7);
         window.dispatchEvent(new Event("pageshow"));
+        // F2 frames the board on the next paint. Observe that deferred work so
+        // this assertion proves it cannot overwrite the newer textarea focus.
+        await new Promise((resolve) => requestAnimationFrame(resolve));
       });
       assert.deepEqual(
         await labels.evaluate((input) => ({

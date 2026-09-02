@@ -3039,6 +3039,7 @@ function createProfileLabContent(
         .filter((value): value is string => Boolean(value)))
       : new Set<string>();
     const activeManualInput = document_.activeElement instanceof HTMLTextAreaElement &&
+        dynamicHost.contains(document_.activeElement) &&
         document_.activeElement.matches("[data-rd-encoder-manual-labels]")
       ? document_.activeElement
       : null;

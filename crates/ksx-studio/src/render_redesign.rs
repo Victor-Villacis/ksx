@@ -16,8 +16,8 @@ use crate::render::{body_prefix_no_refresh, with_icon_links, EmbeddedPage, PERSO
 use crate::render_workbench::{device_row, mode_row, named_slot_ids, other_row};
 use crate::snapshot::{
     compose_board_panel_for_source, selected_source_view, theme_rows, NocturneChoiceRow,
-    RedesignCaptureState, RedesignControllers, RedesignDeviceRows, RedesignJourney,
-    RedesignOperationalState, RedesignPayload, RedesignPersonaRow, SetupSnapshot, StartCaptureView,
+    RedesignCaptureState, RedesignControllers, RedesignDeviceRows, RedesignOperationalState,
+    RedesignPayload, RedesignPersonaRow, SetupSnapshot, StartCaptureView,
 };
 
 /// The island table this page compiles to: exactly one island — the whole
@@ -150,10 +150,6 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
                 .map(|device| device.selector.as_str()),
         ),
     };
-    // Is the staged input an arcade encoder? The nocturne rule: the staged
-    // selector sits in the picker's ENCODER tier. It reword's the capture
-    // rows (wired buttons, not typing) and lets the board resolution offer
-    // the panel fallbacks.
     let exact_source_requested = selected_source.is_some_and(|source| !source.trim().is_empty());
     let selected_device = selected_source
         .map(str::trim)
@@ -169,14 +165,19 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
                 .then_some(staged.device.as_ref())
                 .flatten()
         });
+    // Encoder identity still selects the honest board-profile fallbacks in
+    // the canvas renderer. It must not, however, localise the draft-wide
+    // blocking-policy wording below to "this encoder".
     let encoder_staged = selected_device.is_some_and(|device| {
         devices
             .encoders
             .iter()
             .any(|row| ksx_api::device_selectors_equal(&row.selector, &device.selector))
     });
-    let (capture_rows, capture_note) =
-        crate::snapshot::compose_capture_rows(staged, encoder_staged);
+    // Blocking is one draft/session-wide answer.  Its copy must not change to
+    // singular encoder wording merely because `?source=` currently points at
+    // an encoder in a mixed-source graph.
+    let (capture_rows, capture_note) = crate::snapshot::compose_capture_rows(staged);
     let (scan_read, scan_error) = match &scan {
         Ok(scan) => (Some(scan), ""),
         Err(error) => (None, error.as_str()),
@@ -189,16 +190,34 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
         .chain(devices.experimental.iter_mut())
     {
         row.capture_cls = "rd-dev-capturechip none".to_owned();
+        row.capture_mode.clear();
+        row.capture_detail.clear();
+        row.capture_action_label.clear();
+        row.capture_can_prepare = false;
+        row.capture_can_release = false;
+        let projection = crate::snapshot::staged_device_capture_projection(
+            staged,
+            scan_read,
+            &capture,
+            &row.selector,
+        );
         let capture_badge =
-            crate::snapshot::staged_device_capture_mode(staged, scan_read, &row.selector).and_then(
-                |mode| match mode {
+            projection
+                .as_ref()
+                .and_then(|projection| match projection.mode.as_str() {
                     "prepare" => Some(("Preparation required", "attention")),
                     "release" => Some(("Prepared", "ready")),
                     "ready" | "prepare-optional" => Some(("Ready", "ready")),
-                    "held" | "blocked" => Some(("Needs attention", "attention")),
+                    "held" | "blocked" | "unavailable" => Some(("Needs attention", "attention")),
                     _ => None,
-                },
-            );
+                });
+        if let Some(projection) = projection {
+            row.capture_mode = projection.mode;
+            row.capture_detail = projection.detail;
+            row.capture_action_label = projection.action_label;
+            row.capture_can_prepare = projection.can_prepare;
+            row.capture_can_release = projection.can_release;
+        }
         if let Some((label, state)) = capture_badge {
             row.capture_badge = label.to_owned();
             row.capture_state = state.to_owned();
@@ -213,7 +232,6 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
         outputs,
         &capture,
     );
-    let journey = RedesignJourney::of(staged, session, &capture, &operations.play);
     // The staged input's verified identity, off the SAME capture composition
     // nocturne pins its learn flow to (selector + Windows instance path).
     // Refused scan → empty pair → the mapper refuses to arm, like 4460.
@@ -346,7 +364,6 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
         learn_instance: learn_cap.instance_id,
         operations,
         capture,
-        journey,
     }
 }
 
@@ -370,7 +387,6 @@ const LIST_SLOT_KB_ROW6: &str = "list:rdKbRow6:array";
 const LIST_SLOT_KB_TRAY: &str = "list:rdKbTray:array";
 const LIST_SLOT_KB_LEGEND: &str = "list:rdKbLegend:array";
 const LIST_SLOT_CAPTURE_ROWS: &str = "list:rdCaptureRows:array";
-const LIST_SLOT_JOURNEY_ROWS: &str = "list:rdJourneyRows:array";
 const LIST_SLOT_CAPTURE_HELD: &str = "list:rdCaptureHeld:array";
 
 /// One plate cell, every field spelled once (the nocturne row's shape).
@@ -401,28 +417,24 @@ fn kb_legend_row(row: &crate::snapshot::NocturneLegendRow) -> SlotValue {
     ])
 }
 
-fn board_choice_row(row: &NocturneChoiceRow) -> SlotValue {
+fn board_choice_row(row: &NocturneChoiceRow, tabindex: &str) -> SlotValue {
     SlotValue::object(vec![
         ("name".to_owned(), SlotValue::Text(row.name.clone())),
         ("title".to_owned(), SlotValue::Text(row.title.clone())),
         ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
+        ("chosen".to_owned(), SlotValue::Text(row.chosen.to_string())),
+        ("tabindex".to_owned(), SlotValue::Text(tabindex.to_owned())),
     ])
 }
 
-fn journey_row(row: &crate::snapshot::RedesignJourneyStep) -> SlotValue {
-    SlotValue::object(vec![
-        ("key".to_owned(), SlotValue::Text(row.key.clone())),
-        ("action".to_owned(), SlotValue::Text(row.action.clone())),
-        ("title".to_owned(), SlotValue::Text(row.title.clone())),
-        ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
-        ("badge".to_owned(), SlotValue::Text(row.badge.clone())),
-        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
-        (
-            "aria_current".to_owned(),
-            SlotValue::Text(row.aria_current.clone()),
-        ),
-    ])
+/// Keep every custom-radio action in the native tab order before enhancement.
+/// There is no arrow-key radio controller without JavaScript, so serving only
+/// one `tabindex="0"` would make the other two valid POST actions unreachable.
+/// The island adopts this exact first paint, then establishes roving focus in
+/// its first post-hydration microtask.
+fn capture_choice_rows(rows: &[NocturneChoiceRow]) -> Vec<SlotValue> {
+    rows.iter().map(|row| board_choice_row(row, "0")).collect()
 }
 
 fn held_capture_row(row: &crate::snapshot::RedesignHeldCaptureRow) -> SlotValue {
@@ -461,6 +473,23 @@ fn ctrl_persona_row(row: &RedesignPersonaRow) -> SlotValue {
         ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
         ("usable".to_owned(), SlotValue::Text(row.usable.clone())),
     ])
+}
+
+fn lifecycle_guidance(operations: &RedesignOperationalState) -> String {
+    [
+        ("Save", &operations.save, true),
+        (
+            "Play",
+            &operations.play,
+            operations.play.visible || operations.session.running,
+        ),
+        ("Apply", &operations.apply, operations.apply.visible),
+        ("Stop", &operations.stop, operations.stop.visible),
+    ]
+    .into_iter()
+    .find(|(_, action, visible)| *visible && !action.allowed && !action.reason.trim().is_empty())
+    .map(|(label, action, _)| format!("{label}: {}", action.reason.trim()))
+    .unwrap_or_default()
 }
 
 /// Scalar slot values, keyed by the signal names in RedesignIsland.ts.
@@ -552,7 +581,6 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdOpSavedLabel": payload.operations.saved_label,
         "rdOpSavedDetail": payload.operations.saved_detail,
         "rdOpSessionLine": payload.operations.session.line,
-        "rdOpSessionCls": format!("rd-session-state {}", payload.operations.session_cls),
         "rdOpSessionBadge": if !payload.operations.session.reachable {
             "Status unavailable"
         } else if payload.operations.session.running {
@@ -571,11 +599,12 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdSaveLabel": payload.operations.save.label,
         "rdSaveDisabled": !payload.operations.save.allowed,
         "rdSaveReason": payload.operations.save.reason,
+        "rdActionGuidance": lifecycle_guidance(&payload.operations),
         "rdPlayLabel": payload.operations.play.label,
         "rdPlayDisabled": !payload.operations.play.allowed,
         "rdPlayReason": payload.operations.play.reason,
         "rdPlayCls": if payload.operations.play.visible { "rd-runform rd-playform" } else { "rd-runform rd-playform none" },
-        "rdReplacePlayCls": if payload.operations.session.running { "rd-panel-replace" } else { "rd-panel-replace none" },
+        "rdReplacePlayCls": if payload.operations.session.running { "rd-runform rd-replaceform" } else { "rd-runform rd-replaceform none" },
         "rdApplyLabel": payload.operations.apply.label,
         "rdApplyDisabled": !payload.operations.apply.allowed,
         "rdApplyReason": payload.operations.apply.reason,
@@ -591,12 +620,6 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdDiscardDisabled": !payload.operations.discard.allowed,
         "rdDiscardReason": payload.operations.discard.reason,
         "rdDiscardConfirmCls": if payload.operations.draft_dirty { "rd-danger-confirm" } else { "rd-danger-confirm none" },
-        "rdJourneyCompact": payload.journey.compact,
-        "rdJourneyLine": payload.journey.line,
-        "rdCaptureMode": payload.capture.mode,
-        "rdCaptureDeviceLabel": payload.capture.device_label,
-        "rdCaptureStateLabel": payload.capture.state_label,
-        "rdCaptureStateTone": payload.capture.state_tone,
         "rdCaptureAttentionCls": payload.capture.attention_cls,
         "rdCaptureAttentionTitle": payload.capture.attention_title,
         "rdCaptureAttentionLine": payload.capture.attention_line,
@@ -609,7 +632,6 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdCaptureSelector": payload.capture.selector,
         "rdCaptureInstance": payload.capture.instance,
         "rdCapturePrepareCls": if payload.capture.can_prepare { "rd-capture-prepare" } else { "rd-capture-prepare none" },
-        "rdCaptureHeldCls": if payload.capture.held.is_empty() { "rd-held-recovery none" } else { "rd-held-recovery" },
     })
 }
 
@@ -705,11 +727,7 @@ fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>
         ),
         (
             LIST_SLOT_CAPTURE_ROWS,
-            SlotValue::array(payload.capture_rows.iter().map(board_choice_row).collect()),
-        ),
-        (
-            LIST_SLOT_JOURNEY_ROWS,
-            SlotValue::array(payload.journey.rows.iter().map(journey_row).collect()),
+            SlotValue::array(capture_choice_rows(&payload.capture_rows)),
         ),
         (
             LIST_SLOT_CAPTURE_HELD,
@@ -843,6 +861,8 @@ mod tests {
     /// keyboard, a pickable non-keyboard, and an unpickable device.
     fn fixture_scan() -> ksx_api::DeviceScanView {
         ksx_api::DeviceScanView {
+            usb_available: true,
+            bluetooth_available: true,
             boards_summary: "2 keyboard-capable boards found; 1 more device has no keyboard \
                              interface."
                 .into(),
@@ -1023,6 +1043,45 @@ mod tests {
             !html.contains("http-equiv=\"refresh\"") && !html.contains("url=/redesign"),
             "native workbench state must survive beyond the old five-second timer: {html}"
         );
+    }
+
+    /// All three policy POSTs need native tab stops before the island provides
+    /// arrow-key radio behavior. The chosen fact must not change that native
+    /// reachability; enhancement establishes the one-stop group afterwards.
+    #[test]
+    fn blocking_policy_radios_are_all_native_tab_stops_before_enhancement() {
+        let page = EmbeddedPage::load("/redesign").unwrap();
+        let mut payload = fixture_payload();
+        payload.capture_rows = ["whole", "bound-keys", "off"]
+            .into_iter()
+            .map(|name| NocturneChoiceRow {
+                name: name.to_owned(),
+                title: format!("{name} title"),
+                detail: format!("{name} detail"),
+                cls: "n-radio".to_owned(),
+                chosen: false,
+            })
+            .collect();
+
+        let tabs = |payload: &RedesignPayload| {
+            let slots = build_slots(&page.module, payload, None);
+            let slot_id = named_slot_ids(&page.module, LIST_SLOT_CAPTURE_ROWS)
+                .into_iter()
+                .next()
+                .expect("the capture-row array slot");
+            slots
+                .get(slot_id)
+                .as_array()
+                .expect("capture rows are an array")
+                .iter()
+                .map(|row| row.get_property("tabindex").as_text_ref().to_owned())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(tabs(&payload), ["0", "0", "0"]);
+
+        payload.capture_rows[1].chosen = true;
+        assert_eq!(tabs(&payload), ["0", "0", "0"]);
     }
 
     /// The inspector payload rides the ONE shared controller-panel and pad
@@ -1542,10 +1601,13 @@ mod tests {
 
         let payload = selected_source_payload(&staged, scan, lower_selector);
         assert_eq!(payload.controllers.add_source, lower_selector);
-        assert!(
-            payload.capture_note.is_empty(),
-            "the keyboard must not inherit its case-distinct twin's encoder policy copy"
+        assert_eq!(
+            payload.capture_note,
+            "This choice applies to every input routed into this draft, for this session only.",
+            "global policy scope must not depend on which case-distinct source is inspected"
         );
+        assert!(!payload.capture_note.contains("serial encoder"));
+        assert!(!payload.capture_note.contains("I-PAC"));
         assert_eq!(
             payload.board.kb_title,
             "Lower serial keyboard · Lower transport · Active input"
@@ -1716,7 +1778,7 @@ mod tests {
         assert_eq!(payload.studio_version, env!("CARGO_PKG_VERSION"));
         assert!(
             html.contains("rd-buildmeta"),
-            "support version is available from Setup"
+            "support version is available from Profile"
         );
         assert!(
             html.contains(r#"href="ms-settings:gaming-gamebar""#),
@@ -1892,7 +1954,6 @@ mod tests {
             LIST_SLOT_DEV_EXP,
             LIST_SLOT_DEV_OTHER,
             LIST_SLOT_CTRL_PERSONAS,
-            LIST_SLOT_JOURNEY_ROWS,
             LIST_SLOT_CAPTURE_HELD,
         ] {
             assert!(

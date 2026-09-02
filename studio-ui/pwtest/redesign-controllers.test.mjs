@@ -764,7 +764,16 @@ describe("the controller workbench", () => {
         want,
         { timeout: 20_000 },
       );
-    await page.click('[data-nx="canvas-fit"]');
+    // Selecting a physical source is board-local and must not summon the
+    // controller Inspector. Fit moves the exact board back to overview; its
+    // fixed-screen launcher then returns that board to an honest edit scale.
+    await revealCanvasItem(page, G915_ID);
+    assert.equal(
+      await page.locator(".rd.is-inspector-open").count(),
+      0,
+      "a physical keyboard owns its controls instead of opening the controller Inspector",
+    );
+    await page.click('button.n-autobtn[data-nx="canvas-fit"]:not(.rd-menu-row)');
     await page.waitForTimeout(600);
     // The SERVED plate: six rows of real cells, bound caps wearing their
     // control shorts and ownership bands, the legend naming every player.
@@ -784,13 +793,119 @@ describe("the controller workbench", () => {
     // board remains legible but cannot pretend its tiny controls are honest
     // click targets; focusing the device returns to editing distance.
     assert.equal(await keyboard.getAttribute("data-keyboard-editable"), "false");
-    await revealCanvasItem(page, G915_ID);
+    const operations = keyboard.locator("[data-rd-device-operations]");
+    const openControls = keyboard.locator('[data-nx="rd-open-device-controls"]');
+    assert.equal(await operations.isHidden(), true, "overview hides undersized operations");
+    assert.equal(await operations.evaluate((node) => node.inert), true);
+    assert.equal(await operations.getAttribute("aria-hidden"), "true");
+    await openControls.waitFor({ state: "visible" });
+    const launcherGeometry = await openControls.evaluate((button) => {
+      const rect = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return {
+        width: rect.width,
+        height: rect.height,
+        hitTestable: hit === button || button.contains(hit),
+      };
+    });
+    assert.ok(
+      launcherGeometry.width >= 100 && launcherGeometry.height >= 39.5,
+      `overview launcher must remain an honest target (${launcherGeometry.width}×${launcherGeometry.height})`,
+    );
+    assert.equal(
+      launcherGeometry.hitTestable,
+      true,
+      "the painted Open controls affordance owns its centre hit target",
+    );
+    await openControls.click();
     await page.waitForFunction(
-      (id) => document.querySelector(
-        `.forma-canvas-stage > [data-instance-id="${id}"]`,
-      )?.dataset.keyboardEditable === "true",
+      (id) => {
+        const board = document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"]`,
+        );
+        const operations = board?.querySelector("[data-rd-device-operations]");
+        return board?.dataset.keyboardEditable === "true" &&
+          operations?.hidden === false && operations?.inert === false &&
+          operations.contains(document.activeElement) &&
+          !document.querySelector(".is-camera-animating");
+      },
       G915_ID,
     );
+    assert.equal(
+      await page.locator(".rd.is-inspector-open").count(),
+      0,
+      "Open controls yields the workbench edge to the exact board",
+    );
+    assert.equal(await operations.isVisible(), true);
+    assert.equal(await operations.getAttribute("aria-hidden"), null);
+    assert.equal(
+      await operations.locator('[data-nx="rd-shared-policy"]').isEnabled(),
+      true,
+      "the promoted board exposes an actionable Play-policy control",
+    );
+    const promotedCenterError = await keyboard.evaluate((board) => {
+      const viewport = document.querySelector(".forma-canvas-viewport")?.getBoundingClientRect();
+      const rect = board.getBoundingClientRect();
+      if (!viewport) return Number.POSITIVE_INFINITY;
+      return Math.hypot(
+        rect.left + rect.width / 2 - (viewport.left + viewport.width / 2),
+        rect.top + rect.height / 2 - (viewport.top + viewport.height / 2),
+      );
+    });
+    assert.ok(
+      promotedCenterError <= 8,
+      `Open controls centers the exact keyboard (${promotedCenterError}px error)`,
+    );
+    // The same chrome token must preserve that target at phone width. Keep
+    // the Inspector closed for this pass: on compact layouts it is a modal
+    // layer over the canvas, while the wide pass above proves the launcher
+    // itself dismisses an open Inspector.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForFunction(() => document.documentElement.clientWidth === 390);
+    await page.locator('button.n-autobtn[data-nx="canvas-fit"]:not(.rd-menu-row)')
+      .evaluate((button) => button.click());
+    await page.waitForFunction(
+      (id) => {
+        const board = document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"]`,
+        );
+        return board?.dataset.keyboardEditable === "false" &&
+          board.querySelector("[data-rd-device-operations]")?.hidden === true &&
+          !document.querySelector(".is-camera-animating");
+      },
+      G915_ID,
+    );
+    await openControls.waitFor({ state: "visible" });
+    const mobileLauncherGeometry = await openControls.evaluate((button) => {
+      const rect = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return {
+        width: rect.width,
+        height: rect.height,
+        hitTestable: hit === button || button.contains(hit),
+      };
+    });
+    assert.ok(
+      mobileLauncherGeometry.width >= 100 && mobileLauncherGeometry.height >= 39.5,
+      `phone launcher must remain an honest target (${mobileLauncherGeometry.width}×${mobileLauncherGeometry.height})`,
+    );
+    assert.equal(mobileLauncherGeometry.hitTestable, true);
+    await openControls.click();
+    await page.waitForFunction(
+      (id) => {
+        const board = document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"]`,
+        );
+        const operations = board?.querySelector("[data-rd-device-operations]");
+        return board?.dataset.keyboardEditable === "true" &&
+          operations?.hidden === false && operations?.inert === false &&
+          operations.contains(document.activeElement) &&
+          !document.querySelector(".is-camera-animating");
+      },
+      G915_ID,
+    );
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await revealCanvasItem(page, G915_ID);
     // The finish is the keyboard's own material — a click restamps the
     // widget and the preference survives in this browser.
     await keyboard.locator(
@@ -864,17 +979,20 @@ describe("the controller workbench", () => {
       0,
       "the Board menu stays removed",
     );
-    // While playing — the staged input's capture behaviour (freeze / split
-    // / take nothing), the 4460 device-section picker re-homed onto the
-    // input's own widget. One staged edit; the daemon's answer re-marks.
-    await page.click(".rd-capture .rd-boardpick-sum");
+    // During Play — Freeze / Split / Pass through is one draft-wide policy,
+    // opened from the exact physical board instead of a detached Setup card.
+    const inspectorClose = page.locator('[data-nx="rd-insp-close"]:visible');
+    if (await inspectorClose.isVisible()) await inspectorClose.click();
+    await keyboard.locator('[data-nx="rd-shared-policy"]').click();
+    const policyEditor = page.locator("#rd-shared-policy-editor[open]");
+    await policyEditor.waitFor({ state: "visible" });
     assert.equal(
-      await page.locator(".rd-capture .rd-boardpick-pop form").count(),
+      await policyEditor.locator(".rd-boardpick-pop form").count(),
       3,
       "the daemon's three-answer roster",
     );
-    await page
-      .locator('.rd-capture form input[value="whole"]')
+    await policyEditor
+      .locator('form input[value="whole"]')
       .locator("..")
       .locator("button")
       .click();
@@ -882,7 +1000,7 @@ describe("the controller workbench", () => {
     await page.waitForFunction(
       () =>
         document
-          .querySelector('.rd-capture form input[value="whole"]')
+          .querySelector('#rd-shared-policy-editor form input[value="whole"]')
           ?.closest("form")
           ?.querySelector("button")
           ?.className.includes("on"),

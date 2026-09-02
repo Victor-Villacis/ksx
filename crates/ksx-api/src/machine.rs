@@ -1992,6 +1992,38 @@ impl Default for DeviceScanView {
 }
 
 impl DeviceScanView {
+    /// Did both transport enumerators answer, so a row missing from this view
+    /// is authoritative absence rather than an unread half of the machine?
+    ///
+    /// A present row remains usable even when this is false. This predicate is
+    /// only the licence to draw conclusions from a row that is *not* present.
+    #[must_use]
+    pub fn has_full_absence_authority(&self) -> bool {
+        self.usb_available && self.bluetooth_available
+    }
+
+    /// Can this scan prove that one missing staged selector is disconnected?
+    ///
+    /// Canonical `usb:` selectors and legacy `USB\\…` paths need only the USB
+    /// pass. Bluetooth instance paths need only the Bluetooth pass. Older
+    /// `HID\\…` and otherwise opaque selectors do not preserve transport, so
+    /// their absence is knowable only after both passes answer.
+    #[must_use]
+    pub fn has_absence_authority_for_selector(&self, selector: &str) -> bool {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            return false;
+        }
+        let folded = selector.to_ascii_lowercase();
+        if folded.starts_with("usb:") || folded.starts_with("usb\\") {
+            self.usb_available
+        } else if folded.starts_with("bthenum\\") {
+            self.bluetooth_available
+        } else {
+            self.has_full_absence_authority()
+        }
+    }
+
     /// Compose the view from what was actually read.
     ///
     /// The ONLY constructor for a view that describes a real machine, so that
@@ -5057,6 +5089,50 @@ mod tests {
         // The three failure shapes must not be spelled the same way.
         assert_ne!(usb_only.boards_summary, bt_only.boards_summary);
         assert_ne!(usb_only.boards_summary, UNREAD_BOARDS_LINE);
+    }
+
+    #[test]
+    fn partial_scans_only_authorize_absence_on_the_selector_transport() {
+        let usb_only = DeviceScanView::read(
+            "t".to_owned(),
+            true,
+            true,
+            false,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(!usb_only.has_full_absence_authority());
+        assert!(usb_only.has_absence_authority_for_selector("usb:d209:0430:00"));
+        assert!(usb_only.has_absence_authority_for_selector(r"USB\VID_D209&PID_0430&MI_00\PORT"));
+        assert!(!usb_only.has_absence_authority_for_selector(r"BTHENUM\DEV_D2090430\PORT"));
+        assert!(!usb_only.has_absence_authority_for_selector(r"HID\VID_D209&PID_0430\PORT"));
+
+        let bluetooth_only = DeviceScanView::read(
+            "t".to_owned(),
+            true,
+            false,
+            true,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(!bluetooth_only.has_full_absence_authority());
+        assert!(!bluetooth_only.has_absence_authority_for_selector("usb:d209:0430:00"));
+        assert!(bluetooth_only.has_absence_authority_for_selector(r"BTHENUM\DEV_D2090430\PORT"));
+
+        let complete = DeviceScanView::read(
+            "t".to_owned(),
+            true,
+            true,
+            true,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(complete.has_full_absence_authority());
+        assert!(complete.has_absence_authority_for_selector(r"HID\VID_D209&PID_0430\PORT"));
+        assert!(!complete.has_absence_authority_for_selector(""));
     }
 
     /// **The permanent case, told apart from the not-yet case.**

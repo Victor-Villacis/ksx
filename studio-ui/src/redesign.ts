@@ -17,6 +17,7 @@ import {
   redesignLearnSource,
   redesignOperationalState,
   redesignPads,
+  returnSharedPolicyEditor,
   redesignSelectedSlot,
   redesignSetLivePaths,
   redesignWire,
@@ -66,9 +67,17 @@ interface ActiveRefresh {
 let refreshGeneration = 0;
 let activeRefresh: ActiveRefresh | null = null;
 let newestSettledRefresh = { generation: 0, result: false };
+let latestAppliedRefresh = { generation: 0, fresh: false };
 let liveFeedback: RedesignLiveFeedback | null = null;
 let redesignRoot: HTMLElement | null = null;
 let refreshHealth: "online" | "stale" = "online";
+interface DeviceScanStatus {
+  authoritative: boolean;
+  usbAuthoritative: boolean;
+  bluetoothAuthoritative: boolean;
+  line: string;
+}
+let latestDeviceScanStatus: DeviceScanStatus | null = null;
 let discardConfirmationAuthority: string | null = null;
 let captureConfirmationAuthority: string | null = null;
 const IDENTIFY_OK_FLASH =
@@ -98,9 +107,27 @@ function resetChangedConfirmations(payload: RedesignPayload): void {
   const root = redesignRoot;
   const nextDraft = payload.operations?.draft_revision ?? "";
   if (root && discardConfirmationAuthority !== null && discardConfirmationAuthority !== nextDraft) {
+    const startOver = root.querySelector<HTMLDetailsElement>(".rd-start-over");
+    const ownedFocus = startOver?.contains(document.activeElement) === true;
     const confirmation = root.querySelector<HTMLInputElement>('input[name="confirm_discard"]');
     if (confirmation) confirmation.checked = false;
-    root.querySelector<HTMLElement>(".rd-start-over")?.removeAttribute("open");
+    startOver?.removeAttribute("open");
+    // An in-page mutation has its own outcome/focus lifecycle. This recovery
+    // is specifically for a passive payload that invalidated consent while
+    // the user was still reading it.
+    if (ownedFocus && root.dataset.rdMutationPending !== "true") {
+      rdAnnounce("The draft changed elsewhere, so the Start over confirmation was cleared.");
+      window.requestAnimationFrame(() => {
+        const currentStartOver = root.querySelector<HTMLElement>(".rd-start-over > summary");
+        const profile = root.querySelector<HTMLElement>(".rd-profile-sum");
+        const target = renderedLifecycleTarget(currentStartOver)
+          ? currentStartOver
+          : renderedLifecycleTarget(profile)
+            ? profile
+            : null;
+        target?.focus({ preventScroll: true });
+      });
+    }
   }
   discardConfirmationAuthority = nextDraft;
 
@@ -138,6 +165,18 @@ function reportRefreshHealth(state: "online" | "stale", message = ""): void {
  * revision/session facts. */
 function applyPayload(payload: RedesignPayload): void {
   resetChangedConfirmations(payload);
+  const devices = payload.devices;
+  const authoritative = devices?.scan_authoritative === true;
+  latestDeviceScanStatus = devices
+    ? {
+        authoritative,
+        // Older Studio payloads exposed only the aggregate flag. Preserve
+        // that rolling-upgrade contract here just as the island does.
+        usbAuthoritative: devices.usb_scan_authoritative ?? authoritative,
+        bluetoothAuthoritative: devices.bluetooth_scan_authoritative ?? authoritative,
+        line: devices.scan_line?.trim() ?? "",
+      }
+    : null;
   applyRedesign(payload);
   liveFeedback?.invalidateTargets();
   const operations = payload.operations;
@@ -154,7 +193,7 @@ function applyPayload(payload: RedesignPayload): void {
     if (restart && !restart.hidden && !restartStillValid) {
       closeApplyRestartDialog(redesignRoot, false);
       if (redesignRoot.dataset.rdMutationPending !== "true") {
-        redesignRoot.querySelector<HTMLElement>(".rd-setup-sum")?.focus({ preventScroll: true });
+        redesignRoot.querySelector<HTMLElement>(".rd-profile-sum")?.focus({ preventScroll: true });
       }
       rdAnnounce("The draft or running session changed, so the replacement decision was closed.");
     }
@@ -223,6 +262,7 @@ async function performRefresh(
       return successorRefreshResult(generation);
     }
     applyPayload(payload);
+    latestAppliedRefresh = { generation, fresh };
     reportRefreshHealth("online");
     return true;
   } catch {
@@ -242,10 +282,10 @@ async function performRefresh(
   }
 }
 
-function refresh(kind: RefreshKind = "foreground", fresh = false): Promise<boolean> {
+function beginRefresh(kind: RefreshKind, fresh: boolean): ActiveRefresh | null {
   // A tick is opportunistic. It never aborts or queues behind a user-driven
   // repaint; the next two-second tick will carry the same external truth.
-  if (kind === "poll" && activeRefresh !== null) return Promise.resolve(false);
+  if (kind === "poll" && activeRefresh !== null) return null;
 
   const generation = ++refreshGeneration;
   activeRefresh?.controller.abort();
@@ -256,8 +296,23 @@ function refresh(kind: RefreshKind = "foreground", fresh = false): Promise<boole
     }
     return result;
   });
-  activeRefresh = { generation, kind, controller, promise };
-  return promise;
+  const attempt = { generation, kind, controller, promise };
+  activeRefresh = attempt;
+  return attempt;
+}
+
+function refresh(kind: RefreshKind = "foreground", fresh = false): Promise<boolean> {
+  return beginRefresh(kind, fresh)?.promise ?? Promise.resolve(false);
+}
+
+/** Unlike ordinary consumers, explicit Rescan cannot inherit the success of
+ * a newer cached repaint when its `fresh=1` read is superseded. It succeeds
+ * only when this exact generation applied the payload it requested. */
+async function refreshExact(kind: RefreshKind, fresh: boolean): Promise<boolean> {
+  const attempt = beginRefresh(kind, fresh);
+  if (!attempt || !(await attempt.promise)) return false;
+  return latestAppliedRefresh.generation === attempt.generation &&
+    latestAppliedRefresh.fresh === fresh;
 }
 
 /** Beginning a mutation retires every read that may have sampled pre-write
@@ -274,8 +329,10 @@ function cancelActiveRefresh(): void {
 /** The background tick nocturne keeps (its 2 s poll): between verb-driven
  *  refreshes, another tab's edits still reach this page — armed mapping
  *  gestures retire when their authority goes stale, cords repaint, counts
- *  follow. Paused while the tab is hidden; the visibility return refreshes
- *  once immediately. */
+ *  follow. An open input-policy disclosure is deliberately not a pause: it
+ *  is stable DOM and can safely reconcile while external Save/Play/Stop
+ *  truth advances. Paused while the tab is hidden; the visibility return
+ *  refreshes once immediately. */
 function startBackgroundPoll(root: HTMLElement): void {
   let inFlight = false;
   const tick = async () => {
@@ -302,6 +359,28 @@ function startBackgroundPoll(root: HTMLElement): void {
  *  behavior. With JavaScript off these remain ordinary POST + 303 forms;
  *  with it on, the outcome and served payload repaint in place. */
 function wireForms(root: HTMLElement): void {
+  // The Add tray's buttons are not forms, but they mutate/read the same
+  // authority as every enhanced POST below. Capture their clicks before the
+  // canvas shell's delegated handler so a synthetic click cannot bypass the
+  // native `disabled` guard while another transaction owns the island.
+  root.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const shellControl = target.closest<HTMLButtonElement>(
+      '[data-nx="rd-dev-toggle"], [data-nx="rd-offline-remove"], [data-nx="rd-rescan"]',
+    );
+    if (!shellControl) return;
+    if (root.dataset.rdMutationPending === "true") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (shellControl.dataset.nx === "rd-rescan") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void rescanWorkbenchDevices(root, shellControl);
+    }
+  }, true);
   root.addEventListener("submit", (ev) => {
     const form = ev.target;
     if (!(form instanceof HTMLFormElement)) return;
@@ -421,6 +500,10 @@ const MUTATION_SUBMIT_SELECTOR = [
   ])
   .concat([
     "select.rd-ctrlplayer",
+    '[data-nx="rd-shared-policy"]',
+    '[data-nx="rd-dev-toggle"]',
+    '[data-nx="rd-offline-remove"]',
+    '[data-nx="rd-rescan"]',
     '[data-nx="rd-refresh-retry"]',
     "[data-rd-live-retry]",
   ])
@@ -459,7 +542,7 @@ async function retryWorkbenchStatus(
     if (visible) {
       button.focus({ preventScroll: true });
     } else {
-      root.querySelector<HTMLElement>(".rd-setup-sum")?.focus({ preventScroll: true });
+      root.querySelector<HTMLElement>(".rd-profile-sum")?.focus({ preventScroll: true });
     }
   }
 }
@@ -492,6 +575,100 @@ function endMutation(root: HTMLElement, controls: SubmitControl[]): void {
     control.disabled = served ?? control.dataset.rdProductDisabled === "true";
   });
   pendingMutationRoots.delete(root);
+}
+
+/** Rescan is a foreground authority transaction, even though it writes no
+ * product state. Giving it the same island lock means it can neither sample
+ * before a POST commits and repaint afterward, nor start while such a POST is
+ * pending. The generation coordinator remains the second line of defence. */
+async function rescanWorkbenchDevices(
+  root: HTMLElement,
+  button: HTMLButtonElement,
+): Promise<void> {
+  const controls = beginMutation(root);
+  if (!controls) return;
+  const ownedFocus = actionStillOwnsFocus(button, button);
+  const settledAriaLabel = button.getAttribute("aria-label");
+  button.dataset.rdPending = "true";
+  button.setAttribute("aria-busy", "true");
+  button.textContent = "Rescanning…";
+  button.setAttribute("aria-label", "Rescanning…");
+  rdAnnounce("Rescanning connected devices.");
+  let refreshed = false;
+  try {
+    refreshed = await refreshExact("foreground", true);
+  } finally {
+    if (button.isConnected) {
+      delete button.dataset.rdPending;
+      button.removeAttribute("aria-busy");
+      button.textContent = "Rescan";
+      if (settledAriaLabel === null) button.removeAttribute("aria-label");
+      else button.setAttribute("aria-label", settledAriaLabel);
+    }
+    endMutation(root, controls);
+    if (ownedFocus) {
+      const current = root.querySelector<HTMLButtonElement>('[data-nx="rd-rescan"]');
+      if (current?.isConnected && current.offsetParent !== null) {
+        current.focus({ preventScroll: true });
+      }
+    }
+  }
+  const scan = refreshed ? latestDeviceScanStatus : null;
+  if (!refreshed) {
+    rdAnnounce("Device rescan could not finish. The last known list is still shown.");
+  } else if (scan?.authoritative) {
+    rdAnnounce("Connected devices refreshed.");
+  } else if (scan?.usbAuthoritative || scan?.bluetoothAuthoritative) {
+    const unavailable = [
+      !scan.usbAuthoritative ? "USB" : "",
+      !scan.bluetoothAuthoritative ? "Bluetooth" : "",
+    ].filter(Boolean).join(" and ");
+    rdAnnounce(
+      `Device rescan was partial${unavailable ? `: ${unavailable} did not answer` : ""}.` +
+        `${scan.line ? ` ${scan.line}` : " The last known list is still shown for unavailable connections."}`,
+    );
+  } else {
+    rdAnnounce(
+      `Device rescan could not confirm connected devices.` +
+        `${scan?.line ? ` ${scan.line}` : " The last known list is still shown."}`,
+    );
+  }
+}
+
+function setDeviceMutationPending(
+  root: HTMLElement,
+  selector: string,
+  action: "add" | "remove",
+  pending: boolean,
+): void {
+  const controls = Array.from(
+    root.querySelectorAll<HTMLButtonElement>(
+      '[data-nx="rd-dev-toggle"], [data-nx="rd-offline-remove"]',
+    ),
+  ).filter((control) =>
+    control.dataset.selector === selector ||
+    control.closest<HTMLElement>(".rd-dev-node[data-selector]")?.dataset.selector === selector
+  );
+  for (const control of controls) {
+    const label = control.matches('[data-nx="rd-dev-toggle"]')
+      ? control.querySelector<HTMLElement>(".rd-dev-word")
+      : control;
+    if (pending) {
+      control.dataset.rdPending = "true";
+      control.setAttribute("aria-busy", "true");
+      if (label) {
+        label.dataset.rdSettledLabel = label.textContent ?? "";
+        label.textContent = action === "add" ? "Adding…" : "Removing…";
+      }
+    } else {
+      delete control.dataset.rdPending;
+      control.removeAttribute("aria-busy");
+      if (label?.dataset.rdSettledLabel !== undefined) {
+        label.textContent = label.dataset.rdSettledLabel;
+        delete label.dataset.rdSettledLabel;
+      }
+    }
+  }
 }
 
 /** A delayed response must not steal focus from a modal or another canvas
@@ -1054,8 +1231,16 @@ async function mutateCanvasDevice(
   options: RedesignDeviceMutationOptions,
   root: HTMLElement,
 ): Promise<boolean> {
+  const focusOwner = document.activeElement instanceof HTMLElement && (
+      document.activeElement.dataset.selector === row.selector ||
+      document.activeElement.closest<HTMLElement>(".rd-dev-node[data-selector]")?.dataset
+          .selector === row.selector
+    )
+    ? document.activeElement
+    : null;
   const submits = beginMutation(root);
   if (!submits) return false;
+  setDeviceMutationPending(root, row.selector, action, true);
   let committed = false;
   try {
     const body = new URLSearchParams({ selector: row.selector });
@@ -1119,7 +1304,26 @@ async function mutateCanvasDevice(
   } catch {
     applyRedesignFlash("error: request failed — is ksx studio still running?");
   } finally {
+    const restoreFocus = Boolean(focusOwner && actionStillOwnsFocus(focusOwner, focusOwner));
+    setDeviceMutationPending(root, row.selector, action, false);
     endMutation(root, submits);
+    if (restoreFocus) {
+      const replacement = Array.from(
+        root.querySelectorAll<HTMLElement>(
+          '[data-nx="rd-dev-toggle"], [data-nx="rd-offline-remove"]',
+        ),
+      ).find((control) => {
+        const matches = control.dataset.selector === row.selector ||
+          control.closest<HTMLElement>(".rd-dev-node[data-selector]")?.dataset.selector ===
+            row.selector;
+        return matches && renderedLifecycleTarget(control);
+      });
+      const trayClose = root.querySelector<HTMLElement>(
+        '.rd-devmodal:not([hidden]) [data-nx="rd-devs-close"]',
+      );
+      const target = replacement ?? (renderedLifecycleTarget(trayClose) ? trayClose : null);
+      target?.focus({ preventScroll: true });
+    }
   }
   return committed;
 }
@@ -1136,6 +1340,7 @@ async function submitControllerForm(
   root: HTMLElement,
   submitter: HTMLElement | null,
 ): Promise<void> {
+  const sharedPolicy = form.matches('[data-rd-form="blocking"]');
   const submittedGhost =
     (form.elements.namedItem("ghost") as HTMLInputElement | null)?.value?.trim() ?? "";
   const assignGhost = form.matches('[data-rd-form="controller-assign"]')
@@ -1166,7 +1371,9 @@ async function submitControllerForm(
     rollbackOptimisticPark();
     return;
   }
-  const owner = form.closest<HTMLElement>(".rd-ctrlmodal-panel, .rd-ctrl-node") ?? form;
+  const owner = sharedPolicy
+    ? form.closest<HTMLElement>("[data-rd-source-controls]") ?? form
+    : form.closest<HTMLElement>(".rd-ctrlmodal-panel, .rd-ctrl-node") ?? form;
   try {
     // Forma may reconcile a list row without carrying an <input>'s value
     // property across the repaint. The form's durable row metadata is the
@@ -1265,7 +1472,9 @@ async function submitControllerForm(
     if (parkGhost && !parkConfirmed && !parkOutcomeUnknown) rollbackOptimisticPark();
     const restoreFocus = actionStillOwnsFocus(owner, submitter);
     endMutation(root, submits);
-    if (restoreFocus) {
+    if (sharedPolicy) {
+      returnSharedPolicyEditor(restoreFocus);
+    } else if (restoreFocus) {
       if (
         submitter?.isConnected &&
         !(submitter as HTMLButtonElement | HTMLInputElement).disabled
@@ -1391,6 +1600,8 @@ function lifecycleSubmitButton(
  * accessible name tell the same pending truth. Payload refreshes may replace
  * the old button; a detached node is harmless and the served replacement is
  * already back in its settled state. */
+const lifecycleSettledAriaLabels = new WeakMap<HTMLButtonElement, string | null>();
+
 function setLifecyclePending(button: HTMLButtonElement | null, pending: boolean): void {
   if (!button) return;
   const settled = button.querySelector<HTMLElement>(".rd-action-label");
@@ -1399,11 +1610,44 @@ function setLifecyclePending(button: HTMLButtonElement | null, pending: boolean)
   settled.hidden = pending;
   pendingLabel.hidden = !pending;
   button.toggleAttribute("data-rd-pending", pending);
-  if (pending) button.setAttribute("aria-busy", "true");
-  else button.removeAttribute("aria-busy");
+  if (pending) {
+    if (!lifecycleSettledAriaLabels.has(button)) {
+      lifecycleSettledAriaLabels.set(button, button.getAttribute("aria-label"));
+    }
+    // Some exact-device actions have a richer settled aria-label than their
+    // short painted copy. While pending, however, the visible status is the
+    // complete action: expose that same text, then restore the exact original
+    // attribute (including its absence) when the transaction settles.
+    button.setAttribute("aria-label", pendingLabel.textContent?.trim() || "Working…");
+    button.setAttribute("aria-busy", "true");
+  } else {
+    button.removeAttribute("aria-busy");
+    if (lifecycleSettledAriaLabels.has(button)) {
+      const ariaLabel = lifecycleSettledAriaLabels.get(button) ?? null;
+      if (ariaLabel === null) button.removeAttribute("aria-label");
+      else button.setAttribute("aria-label", ariaLabel);
+      lifecycleSettledAriaLabels.delete(button);
+    }
+  }
 }
 
-function lifecycleFocusTarget(root: HTMLElement, kind: LifecycleFormKind): HTMLElement | null {
+interface CaptureFocusIdentity {
+  selector: string;
+  instance: string;
+}
+
+function renderedLifecycleTarget(target: HTMLElement | null): target is HTMLElement {
+  if (!target?.isConnected || target.closest("[hidden], [inert]")) return false;
+  const style = window.getComputedStyle(target);
+  return target.getClientRects().length > 0 && style.display !== "none" &&
+    style.visibility !== "hidden";
+}
+
+function lifecycleFocusTarget(
+  root: HTMLElement,
+  kind: LifecycleFormKind,
+  capture: CaptureFocusIdentity | null = null,
+): HTMLElement | null {
   const visibleAction = (formKind: "play" | "stop") =>
     Array.from(
       root.querySelectorAll<HTMLElement>(
@@ -1411,12 +1655,34 @@ function lifecycleFocusTarget(root: HTMLElement, kind: LifecycleFormKind): HTMLE
       ),
     ).find((button) => button.offsetParent !== null) ?? null;
   if (kind === "play" || kind === "play-replace") {
-    return visibleAction("stop") ?? root.querySelector<HTMLElement>(".rd-setup-sum");
+    return visibleAction("stop") ?? root.querySelector<HTMLElement>(".rd-profile-sum");
   }
   if (kind === "stop") {
-    return visibleAction("play") ?? root.querySelector<HTMLElement>(".rd-setup-sum");
+    return visibleAction("play") ?? root.querySelector<HTMLElement>(".rd-profile-sum");
   }
-  return root.querySelector<HTMLElement>(".rd-setup-sum");
+  if (capture && (kind === "capture-prepare" || kind === "capture-release")) {
+    const instance = capture.instance.toLowerCase();
+    const board = Array.from(
+      root.querySelectorAll<HTMLElement>(".rd-dev-node[data-selector]"),
+    ).find((item) =>
+      item.dataset.selector === capture.selector &&
+      item.dataset.staged === "true" &&
+      (item.dataset.sourceInstance ?? "").toLowerCase() === instance
+    );
+    const summary = board?.querySelector<HTMLElement>("[data-rd-device-capture] > summary") ?? null;
+    if (renderedLifecycleTarget(summary)) return summary;
+    const held = Array.from(
+      root.querySelectorAll<HTMLElement>(".rd-held-row[data-held-selector]"),
+    ).find((row) =>
+      row.dataset.heldSelector === capture.selector &&
+      (row.dataset.heldInstance ?? "").toLowerCase() === instance
+    );
+    if (renderedLifecycleTarget(held ?? null)) return held!;
+    const review = root.querySelector<HTMLElement>('[data-nx="rd-review-recovery"]');
+    if (renderedLifecycleTarget(review)) return review;
+    return root.querySelector<HTMLElement>(".rd-profile-sum");
+  }
+  return root.querySelector<HTMLElement>(".rd-profile-sum");
 }
 
 /** One lifecycle transaction owns the whole island. Apply is the single
@@ -1433,6 +1699,14 @@ async function submitLifecycleForm(
   const startedWithFocus = activeAtStart === submitter || Boolean(activeAtStart && form.contains(activeAtStart));
   const requestedRevision = form.querySelector<HTMLInputElement>('input[name="expected_revision"]')
     ?.value.trim() ?? "";
+  const requestedCapture = kind === "capture-prepare" || kind === "capture-release"
+    ? {
+        selector: form.querySelector<HTMLInputElement>('input[name="expected_selector"]')
+          ?.value.trim() ?? "",
+        instance: form.querySelector<HTMLInputElement>('input[name="instance_id"]')
+          ?.value.trim() ?? "",
+      }
+    : null;
   const requestedApplyAuthority = kind === "apply"
     ? applyAuthority(redesignOperationalState())
     : "";
@@ -1540,14 +1814,18 @@ async function submitLifecycleForm(
     if (kind === "play-replace" && actionSucceeded) {
       closeApplyRestartDialog(root, false);
     }
+    if (actionSucceeded && (kind === "adopt" || kind === "discard")) {
+      const profile = root.querySelector<HTMLDetailsElement>("[data-rd-profile-menu]");
+      if (profile?.open) profile.open = false;
+    }
     if (!restoreFocus) return;
     const retryTarget = submitter?.isConnected && submitter.offsetParent !== null &&
         !("disabled" in submitter && submitter.disabled === true)
       ? submitter
       : null;
     const target = actionSucceeded
-      ? lifecycleFocusTarget(root, kind)
-      : retryTarget ?? lifecycleFocusTarget(root, kind);
+      ? lifecycleFocusTarget(root, kind, requestedCapture)
+      : retryTarget ?? lifecycleFocusTarget(root, kind, requestedCapture);
     target?.focus({ preventScroll: true });
   }
 }

@@ -251,7 +251,26 @@ fn unchanged_device_choice(
 
 #[cfg(test)]
 mod selector_identity_tests {
-    use super::unchanged_device_choice;
+    use super::{capture_staged_device, unchanged_device_choice, unique_capture_board};
+
+    fn staged_device(selector: &str) -> ksx_api::StagedSetupView {
+        ksx_api::StagedSetupView {
+            reachable: true,
+            devices: vec![ksx_api::StagedDeviceView {
+                selector: selector.into(),
+                backend: "winusb".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn board(selector: &str) -> ksx_api::BoardRow {
+        ksx_api::BoardRow {
+            selector: Some(selector.into()),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn unchanged_choice_keeps_usb_serial_case_exact() {
@@ -273,6 +292,30 @@ mod selector_identity_tests {
             "twin",
             "Twin keyboard"
         ));
+    }
+
+    #[test]
+    fn capture_joins_accept_equivalent_legacy_selector_spelling() {
+        const CANONICAL: &str = r"USB\VID_D209&PID_0430&MI_00\7&1A2B3C4D&0&0000";
+        const ALTERNATE: &str = r"usb\vid_d209&pid_0430&mi_00\7&1a2b3c4d&0&0000";
+
+        let staged = staged_device(CANONICAL);
+        assert!(capture_staged_device(&staged, ALTERNATE).is_some());
+
+        let boards = [board(CANONICAL)];
+        assert!(unique_capture_board(&boards, ALTERNATE).is_some());
+    }
+
+    #[test]
+    fn capture_joins_keep_usb_serial_case_exact() {
+        const UPPER: &str = "usb:3434:0b10:00:sn=BoardA";
+        const LOWER: &str = "USB:3434:0B10:00:SN=boarda";
+
+        let staged = staged_device(UPPER);
+        assert!(capture_staged_device(&staged, LOWER).is_none());
+
+        let boards = [board(UPPER)];
+        assert!(unique_capture_board(&boards, LOWER).is_none());
     }
 }
 
@@ -325,6 +368,35 @@ fn already_in_state(refusal: &ksx_api::Refusal) -> bool {
     )
 }
 
+fn capture_staged_device<'a>(
+    staged: &'a ksx_api::StagedSetupView,
+    expected_selector: &str,
+) -> Option<&'a ksx_api::StagedDeviceView> {
+    staged
+        .devices
+        .iter()
+        .find(|device| ksx_api::device_selectors_equal(&device.selector, expected_selector))
+        .or_else(|| {
+            staged.device.as_ref().filter(|device| {
+                ksx_api::device_selectors_equal(&device.selector, expected_selector)
+            })
+        })
+}
+
+fn unique_capture_board<'a>(
+    boards: &'a [ksx_api::BoardRow],
+    expected_selector: &str,
+) -> Option<&'a ksx_api::BoardRow> {
+    let mut matches = boards.iter().filter(|board| {
+        board
+            .selector
+            .as_deref()
+            .is_some_and(|selector| ksx_api::device_selectors_equal(selector, expected_selector))
+    });
+    let board = matches.next()?;
+    matches.next().is_none().then_some(board)
+}
+
 fn capture_target(
     state: &AppState,
     action: CaptureMutation,
@@ -333,16 +405,7 @@ fn capture_target(
 ) -> Result<(String, String), CaptureResult> {
     if action == CaptureMutation::Prepare {
         let staged = state.control.staged();
-        let device = staged
-            .devices
-            .iter()
-            .find(|device| device.selector == expected_selector)
-            .or_else(|| {
-                staged
-                    .device
-                    .as_ref()
-                    .filter(|device| device.selector == expected_selector)
-            })
+        let device = capture_staged_device(&staged, expected_selector)
             .filter(|_| staged.reachable)
             .ok_or(CaptureResult::TargetChanged)?;
         if device.backend != "interception" && device.backend != "winusb" {
@@ -356,12 +419,9 @@ fn capture_target(
         .machine
         .device_scan()
         .map_err(|_| CaptureResult::TargetChanged)?;
-    let mut matches = scan
-        .boards
-        .iter()
-        .filter(|board| board.selector.as_deref() == Some(expected_selector));
-    let board = matches.next().ok_or(CaptureResult::TargetChanged)?;
-    if matches.next().is_some() || !board.winusb_eligible {
+    let board = unique_capture_board(&scan.boards, expected_selector)
+        .ok_or(CaptureResult::TargetChanged)?;
+    if !board.winusb_eligible {
         return Err(CaptureResult::TargetChanged);
     }
     let current_instance = board
@@ -508,7 +568,7 @@ pub(super) async fn capture_release(
             .devices
             .iter()
             .chain(staged.device.iter())
-            .any(|device| device.selector == expected_selector)
+            .any(|device| ksx_api::device_selectors_equal(&device.selector, &expected_selector))
             && !state
                 .control
                 .stage_edit(&ksx_api::StageEdit::SetDeviceBackend {

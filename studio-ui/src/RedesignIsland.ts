@@ -114,6 +114,33 @@ export interface RdChoiceRowView {
  * to an attribute setter (where `true` becomes the meaningless empty value). */
 interface RdRenderedChoiceRow extends Omit<RdChoiceRowView, "chosen"> {
   chosen: "true" | "false";
+  tabindex: "0" | "-1";
+}
+
+function renderedChoiceRows(rows: RdChoiceRowView[]): RdRenderedChoiceRow[] {
+  const hasChosen = rows.some((row) => row.chosen);
+  return rows.map((row, index) => ({
+    ...row,
+    chosen: row.chosen ? "true" : "false",
+    // One stop enters a radio group. An unset draft puts that stop on the
+    // first valid answer without falsely claiming it is already selected.
+    tabindex: row.chosen || (!hasChosen && index === 0) ? "0" : "-1",
+  }));
+}
+
+/** Progressive enhancement boundary for the custom policy radios. Native
+ * SSR has no arrow-key controller, so every valid POST must remain tabbable.
+ * The first task after island adoption switches to the one-stop radio model. */
+function renderedPolicyRows(
+  rows: RdChoiceRowView[],
+  roving: boolean,
+): RdRenderedChoiceRow[] {
+  if (roving) return renderedChoiceRows(rows);
+  return rows.map((row) => ({
+    ...row,
+    chosen: row.chosen ? "true" : "false",
+    tabindex: "0",
+  }));
 }
 
 /** One picker device row — `NocturneDeviceRow` on the wire (snapshot.rs),
@@ -148,6 +175,13 @@ export interface RdDeviceRowView {
   capture_badge: string;
   capture_state: string;
   capture_cls: string;
+  /** Stable, server-authored exact-device capture projection. Display copy is
+   * deliberately separate from the mode so actions never parse a badge. */
+  capture_mode: string;
+  capture_detail: string;
+  capture_action_label: string;
+  capture_can_prepare: boolean;
+  capture_can_release: boolean;
 }
 
 /** A device the picker shows but cannot offer — no keyboard interface, or
@@ -173,6 +207,10 @@ export interface RdDeviceRows {
   other_fold_cls: string;
   scan_line: string;
   scan_authoritative: boolean;
+  /** Per-transport absence authority. Older Studio payloads omit these, so
+   * the client falls back to the aggregate flag during a rolling upgrade. */
+  usb_scan_authoritative?: boolean;
+  bluetooth_scan_authoritative?: boolean;
   staging_reachable: boolean;
   staging_line: string;
 }
@@ -301,8 +339,8 @@ export interface RedesignPayload {
   devices: RdDeviceRows;
   controllers: RdControllers;
   board: RdBoardPanel;
-  /** The staged input's capture behaviour — `compose_capture_rows` on the
-   *  wire (freeze / split / take nothing, the current answer marked). */
+  /** The staged inputs' shared Play behaviour — `compose_capture_rows` on the
+   * wire (Take all / Split / Pass through, with the current answer marked). */
   capture_rows: RdChoiceRowView[];
   capture_note: string;
   /** The staged input's verified Windows identity — the mapper's source
@@ -315,9 +353,6 @@ export interface RedesignPayload {
   operations?: RdOperationalState;
   /** Exact input preparation and machine-keyed held-device recovery. */
   capture?: RdCaptureState;
-  /** The required four-stop product journey: input -> controllers -> map ->
-   * Play. Advanced surface authoring is deliberately not a gate. */
-  journey?: RdJourneyState;
 }
 
 export interface RdActionState {
@@ -401,21 +436,18 @@ export interface RdCaptureState {
   attention_retry_cls: string;
 }
 
-export interface RdJourneyRow {
-  key: string;
-  /** Stable UI destination. Never infer this from customer-facing copy. */
-  action: string;
-  title: string;
-  detail: string;
-  badge: string;
-  cls: string;
-  aria_current: string;
-}
-
-export interface RdJourneyState {
-  line: string;
-  compact?: string;
-  rows: RdJourneyRow[];
+function composeLifecycleGuidance(operations?: RdOperationalState): string {
+  if (!operations) return "Save: Complete the current draft before saving.";
+  const rows: Array<[string, RdActionState, boolean]> = [
+    ["Save", operations.save, true],
+    ["Play", operations.play, operations.play.visible !== false || operations.session.running],
+    ["Apply", operations.apply, operations.apply.visible === true],
+    ["Stop", operations.stop, operations.stop.visible === true],
+  ];
+  const blocked = rows.find(([, action, visible]) =>
+    visible && action.allowed !== true && action.reason.trim().length > 0
+  );
+  return blocked ? `${blocked[0]}: ${blocked[1].reason.trim()}` : "";
 }
 
 // ── SERVED signals — copiers, never derivers ────────────────────────────────
@@ -430,6 +462,11 @@ const [rdDevKb, setRdDevKb] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevEnc, setRdDevEnc] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevExp, setRdDevExp] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevOther, setRdDevOther] = createSignal<RdOtherRowView[]>([]);
+// Imperative canvas reconciliation must see one atomic payload generation.
+// Forma list effects may settle between individual signal setters, so using
+// those getters here can briefly combine the new aggregate scan flag with a
+// row from the preceding generation.
+let rdDeviceRowsSnapshot: RdDeviceRowView[] = [];
 const [rdDevScanLine, setRdDevScanLine] = createSignal("");
 
 /** The compact rail must name demo data instead of collapsing provenance to
@@ -478,8 +515,9 @@ const [rdKbTrayCls, setRdKbTrayCls] = createSignal("n-kbtray none");
 const [rdKbNote, setRdKbNote] = createSignal("");
 const [rdKbMoreCls, setRdKbMoreCls] = createSignal("n-lgdmore none");
 const [rdSoloLbl, setRdSoloLbl] = createSignal("Only this player");
-// The staged input's capture behaviour (freeze / split / take nothing).
-const [rdCaptureRows, setRdCaptureRows] = createSignal<RdChoiceRowView[]>([]);
+// The routed inputs' shared Play behaviour (Take all / Split / Pass through).
+const [rdCaptureRows, setRdCaptureRows] = createSignal<RdRenderedChoiceRow[]>([]);
+let rdCaptureChoiceRows: RdChoiceRowView[] = [];
 const [rdCaptureNote, setRdCaptureNote] = createSignal("");
 // The operational shell is server-owned truth in three independent state
 // machines: draft/durable config, running session, and exact-device capture.
@@ -489,7 +527,6 @@ const [rdOpDraftDetail, setRdOpDraftDetail] = createSignal("");
 const [rdOpSavedLabel, setRdOpSavedLabel] = createSignal("Nothing saved yet");
 const [rdOpSavedDetail, setRdOpSavedDetail] = createSignal("");
 const [rdOpSessionLine, setRdOpSessionLine] = createSignal("Session status unavailable");
-const [rdOpSessionCls, setRdOpSessionCls] = createSignal("rd-session-state down");
 const [rdOpSessionBadge, setRdOpSessionBadge] = createSignal("Status unavailable");
 const [rdOpSessionBadgeState, setRdOpSessionBadgeState] = createSignal("attention");
 const [rdOpEscapeLine, setRdOpEscapeLine] = createSignal("");
@@ -499,10 +536,10 @@ const [rdDiscardConfirmCls, setRdDiscardConfirmCls] = createSignal("rd-danger-co
 
 const [rdSaveLabel, setRdSaveLabel] = createSignal("Save");
 const [rdSaveDisabled, setRdSaveDisabled] = createSignal(true);
-const [rdSaveReason, setRdSaveReason] = createSignal("Finish the setup before saving.");
+const [rdSaveReason, setRdSaveReason] = createSignal("Complete the current draft before saving.");
 const [rdPlayLabel, setRdPlayLabel] = createSignal("Play");
 const [rdPlayDisabled, setRdPlayDisabled] = createSignal(true);
-const [rdPlayReason, setRdPlayReason] = createSignal("Finish the setup before Play.");
+const [rdPlayReason, setRdPlayReason] = createSignal("Complete the current draft before Play.");
 const [rdPlayCls, setRdPlayCls] = createSignal("rd-runform");
 const [rdApplyLabel, setRdApplyLabel] = createSignal("Apply changes");
 const [rdApplyDisabled, setRdApplyDisabled] = createSignal(true);
@@ -512,22 +549,18 @@ const [rdStopLabel, setRdStopLabel] = createSignal("Stop");
 const [rdStopDisabled, setRdStopDisabled] = createSignal(true);
 const [rdStopReason, setRdStopReason] = createSignal("Nothing is running.");
 const [rdStopCls, setRdStopCls] = createSignal("rd-runform none");
-const [rdReplacePlayCls, setRdReplacePlayCls] = createSignal("rd-panel-replace none");
+const [rdReplacePlayCls, setRdReplacePlayCls] = createSignal("rd-runform rd-replaceform none");
 const [rdAdoptLabel, setRdAdoptLabel] = createSignal("Load saved setup");
 const [rdAdoptDisabled, setRdAdoptDisabled] = createSignal(true);
 const [rdAdoptReason, setRdAdoptReason] = createSignal("There is no saved setup to load.");
 const [rdDiscardLabel, setRdDiscardLabel] = createSignal("Start over");
 const [rdDiscardDisabled, setRdDiscardDisabled] = createSignal(true);
 const [rdDiscardReason, setRdDiscardReason] = createSignal("This draft is already empty.");
-
-const [rdJourneyLine, setRdJourneyLine] = createSignal("Pick an input to begin.");
-const [rdJourneyCompact, setRdJourneyCompact] = createSignal("Setup · 0/4");
-const [rdJourneyRows, setRdJourneyRows] = createSignal<RdJourneyRow[]>([]);
+const [rdActionGuidance, setRdActionGuidance] = createSignal(
+  "Save: Complete the current draft before saving.",
+);
 
 const [rdCaptureMode, setRdCaptureMode] = createSignal("none");
-const [rdCaptureDeviceLabel, setRdCaptureDeviceLabel] = createSignal("");
-const [rdCaptureStateLabel, setRdCaptureStateLabel] = createSignal("No input");
-const [rdCaptureStateTone, setRdCaptureStateTone] = createSignal("stopped");
 const [rdCaptureAttentionCls, setRdCaptureAttentionCls] = createSignal("rd-attention none");
 const [rdCaptureAttentionTitle, setRdCaptureAttentionTitle] = createSignal("");
 const [rdCaptureAttentionLine, setRdCaptureAttentionLine] = createSignal("");
@@ -535,12 +568,11 @@ const [rdCaptureAttentionDetail, setRdCaptureAttentionDetail] = createSignal("")
 const [rdCaptureAttentionReviewLabel, setRdCaptureAttentionReviewLabel] = createSignal("Review recovery");
 const [rdCaptureAttentionRetryCls, setRdCaptureAttentionRetryCls] = createSignal("rd-panel-action rd-attention-retry none");
 const [rdCaptureHeading, setRdCaptureHeading] = createSignal("No input selected");
-const [rdCaptureLine, setRdCaptureLine] = createSignal("Pick the input this setup will listen to.");
+const [rdCaptureLine, setRdCaptureLine] = createSignal("Pick a keyboard or encoder to begin.");
 const [rdCaptureRecoveryLine, setRdCaptureRecoveryLine] = createSignal("");
 const [rdCaptureSelector, setRdCaptureSelector] = createSignal("");
 const [rdCaptureInstance, setRdCaptureInstance] = createSignal("");
 const [rdCapturePrepareCls, setRdCapturePrepareCls] = createSignal("rd-capture-prepare none");
-const [rdCaptureHeldCls, setRdCaptureHeldCls] = createSignal("rd-held-recovery none");
 const [rdCaptureHeld, setRdCaptureHeld] = createSignal<RdHeldCaptureRow[]>([]);
 const [rdCtrlAddNote, setRdCtrlAddNote] = createSignal("");
 const [rdCtrlCountsLine, setRdCtrlCountsLine] = createSignal("");
@@ -598,9 +630,15 @@ export function redesignFormProductDisabled(form: HTMLFormElement): boolean | un
     return state ? state.allowed !== true : true;
   }
   if (kind === "capture-prepare") {
+    if (form.dataset.rdCaptureAllowed !== undefined) {
+      return form.dataset.rdCaptureAllowed !== "true";
+    }
     return rdCapturePrepareCls().includes("none");
   }
   if (kind === "capture-release") {
+    if (form.dataset.rdCaptureAllowed !== undefined) {
+      return form.dataset.rdCaptureAllowed !== "true";
+    }
     const selector = (form.elements.namedItem("expected_selector") as HTMLInputElement | null)
       ?.value ?? "";
     const instance = (form.elements.namedItem("instance_id") as HTMLInputElement | null)
@@ -1164,6 +1202,8 @@ function locateBindRow(body: HTMLElement, fns: string): void {
 const [rdUndoCls, setRdUndoCls] = createSignal("rd-undochip none");
 const [rdUndoLabel, setRdUndoLabel] = createSignal("");
 let rdDeviceScanAuthoritative = false;
+let rdUsbScanAuthoritative = false;
+let rdBluetoothScanAuthoritative = false;
 let rdStagingReachable = false;
 let rdStagingLine = "";
 
@@ -1181,12 +1221,12 @@ export function applyRedesign(v: RedesignPayload): void {
   setRdStudioVersion(v.studio_version || "unknown");
   const operations = v.operations;
   rdOperations = operations ?? null;
+  setRdActionGuidance(composeLifecycleGuidance(operations));
   setRdOpDraftLabel(operations?.draft_label ?? "New draft");
   setRdOpDraftDetail(operations?.draft_detail ?? "Pick an input to begin.");
   setRdOpSavedLabel(operations?.saved_label ?? "Nothing saved yet");
   setRdOpSavedDetail(operations?.saved_detail ?? "Save writes this draft for later.");
   setRdOpSessionLine(operations?.session?.line ?? "Session status unavailable");
-  setRdOpSessionCls(`rd-session-state ${operations?.session_cls || "down"}`);
   setRdOpSessionBadge(
     operations?.session?.reachable !== true
       ? "Status unavailable"
@@ -1210,11 +1250,11 @@ export function applyRedesign(v: RedesignPayload): void {
   const save = operations?.save;
   setRdSaveLabel(save?.label || "Save");
   setRdSaveDisabled(save?.allowed !== true);
-  setRdSaveReason(save?.reason ?? "Finish the setup before saving.");
+  setRdSaveReason(save?.reason ?? "Complete the current draft before saving.");
   const play = operations?.play;
   setRdPlayLabel(play?.label || "Play");
   setRdPlayDisabled(play?.allowed !== true);
-  setRdPlayReason(play?.reason ?? "Finish the setup before Play.");
+  setRdPlayReason(play?.reason ?? "Complete the current draft before Play.");
   setRdPlayCls(play?.visible === false ? "rd-runform rd-playform none" : "rd-runform rd-playform");
   const apply = operations?.apply;
   setRdApplyLabel(apply?.label || "Apply changes");
@@ -1236,8 +1276,8 @@ export function applyRedesign(v: RedesignPayload): void {
   );
   setRdReplacePlayCls(
     operations?.session?.running === true
-      ? "rd-panel-replace"
-      : "rd-panel-replace none",
+      ? "rd-runform rd-replaceform"
+      : "rd-runform rd-replaceform none",
   );
   const adopt = operations?.adopt;
   setRdAdoptLabel(adopt?.label || "Load saved setup");
@@ -1248,22 +1288,8 @@ export function applyRedesign(v: RedesignPayload): void {
   setRdDiscardDisabled(discard?.allowed !== true);
   setRdDiscardReason(discard?.reason ?? "This draft is already empty.");
 
-  const journey = v.journey;
-  const journeyRows = journey?.rows ?? [];
-  setRdJourneyRows(journeyRows);
-  setRdJourneyLine(journey?.line ?? "Pick an input to begin.");
-  const journeyDone = journeyRows.filter((row) => row.badge === "Done").length;
-  const journeyNow = journeyRows.find((row) => row.badge === "Now" || row.badge === "Blocked");
-  setRdJourneyCompact(
-    journey?.compact ||
-      `${journeyDone}/4 · ${operations?.session?.running ? "Playing" : journeyNow?.title ?? "Setup"}`,
-  );
-
   const capture = v.capture;
   setRdCaptureMode(capture?.mode ?? "none");
-  setRdCaptureDeviceLabel(capture?.device_label ?? "");
-  setRdCaptureStateLabel(capture?.state_label ?? "No input");
-  setRdCaptureStateTone(capture?.state_tone ?? "stopped");
   setRdCaptureAttentionCls(capture?.attention_cls ?? "rd-attention none");
   setRdCaptureAttentionTitle(capture?.attention_title ?? "");
   setRdCaptureAttentionLine(capture?.attention_line ?? "");
@@ -1273,13 +1299,18 @@ export function applyRedesign(v: RedesignPayload): void {
     capture?.attention_retry_cls ?? "rd-panel-action rd-attention-retry none",
   );
   setRdCaptureHeading(capture?.heading ?? "No input selected");
-  setRdCaptureLine(capture?.line ?? "Pick the input this setup will listen to.");
+  setRdCaptureLine(capture?.line ?? "Pick a keyboard or encoder to begin.");
   setRdCaptureRecoveryLine(capture?.recovery_line ?? "");
   setRdCaptureSelector(capture?.selector ?? "");
   setRdCaptureInstance(capture?.instance ?? "");
   setRdCapturePrepareCls(
     capture?.can_prepare === true ? "rd-capture-prepare" : "rd-capture-prepare none",
   );
+  const recovery = rdRoot?.querySelector<HTMLElement>("[data-rd-recovery-sheet]") ?? null;
+  const heldFocus = captureHeldRecoveryFocus(recovery);
+  const recoveryOwnedFocus = recovery?.contains(document.activeElement) === true;
+  const recoveryClosedByPassiveRefresh = recoveryOwnedFocus &&
+    rdRoot?.dataset.rdMutationPending !== "true";
   setRdCaptureHeld(
     (capture?.held ?? []).map((row) => ({
       ...row,
@@ -1287,14 +1318,24 @@ export function applyRedesign(v: RedesignPayload): void {
       disabled: !row.can_release,
     })),
   );
-  setRdCaptureHeldCls(
-    (capture?.held?.length ?? 0) > 0 ? "rd-held-recovery" : "rd-held-recovery none",
-  );
+  if ((capture?.held?.length ?? 0) === 0) {
+    if (recovery) {
+      resetCaptureConfirmations(recovery);
+      recovery.hidden = true;
+      if (recoveryOwnedFocus) {
+        window.requestAnimationFrame(() => {
+          recoveryReturnTarget()?.focus({ preventScroll: true });
+          if (recoveryClosedByPassiveRefresh) {
+            rdAnnounce("Exact-device recovery closed because no held inputs remain.");
+          }
+        });
+      }
+    }
+  } else if (heldFocus) {
+    window.requestAnimationFrame(() => restoreHeldRecoveryFocus(heldFocus));
+  }
   const themeRows = v.theme_rows ?? [];
-  const renderedThemeRows = themeRows.map((row) => ({
-    ...row,
-    chosen: row.chosen ? "true" : "false",
-  }));
+  const renderedThemeRows = renderedChoiceRows(themeRows);
   setRdThemeRows(renderedThemeRows);
   // The ONE verb whose effect lives outside this island's tree (the
   // nocturne lesson, carried over with the rows). Every other form's outcome
@@ -1316,19 +1357,26 @@ export function applyRedesign(v: RedesignPayload): void {
   }
   const d = v.devices;
   rdDeviceScanAuthoritative = d?.scan_authoritative === true;
+  rdUsbScanAuthoritative = d?.usb_scan_authoritative ?? rdDeviceScanAuthoritative;
+  rdBluetoothScanAuthoritative =
+    d?.bluetooth_scan_authoritative ?? rdDeviceScanAuthoritative;
   rdStagingReachable = d?.staging_reachable === true;
   rdStagingLine = d?.staging_line ?? "";
-  setRdDevKb(d?.keyboards ?? []);
+  const nextKeyboards = d?.keyboards ?? [];
   // The encoder rows drop the transient `chart not read yet` phrase the
   // moment the page owns the live read (the encoder surface starts it at
   // mount) — the modal meta span is marked data-live-chatter for exactly
   // this: its TEXT follows the session, by the parity contract.
-  setRdDevEnc((d?.encoders ?? []).map((row) => ({
+  const nextEncoders = (d?.encoders ?? []).map((row) => ({
     ...row,
     meta: deviceCardMeta(row),
-  })));
+  }));
+  const nextExperimental = d?.experimental ?? [];
+  rdDeviceRowsSnapshot = [...nextKeyboards, ...nextEncoders, ...nextExperimental];
+  setRdDevKb(nextKeyboards);
+  setRdDevEnc(nextEncoders);
   refreshEncoderProfileLab?.(encoderProfileLabDevices());
-  setRdDevExp(d?.experimental ?? []);
+  setRdDevExp(nextExperimental);
   setRdDevOther(d?.other ?? []);
   const stagedSources = [
     ...(d?.keyboards ?? []),
@@ -1346,18 +1394,23 @@ export function applyRedesign(v: RedesignPayload): void {
       (pad.sources ?? []).map((source) => source.source_id)
     ),
   ].filter(Boolean));
-  const currentSource = currentAuthoringSource();
-  const servedSource = v.source?.trim() || v.controllers?.source?.trim() || "";
-  if (servedSource && canonicalStagedSelectors.has(servedSource)) {
-    mergeSourceIntoUrl(servedSource, false);
-  } else if (!canonicalStagedSelectors.has(currentSource)) {
-    const fallback = canonicalStagedSelectors.values().next().value ?? "";
-    if (fallback) mergeSourceIntoUrl(fallback, false);
-    else if (currentSource) {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("source");
-      const query = url.searchParams.toString();
-      window.history.replaceState(null, "", `${url.pathname}${query ? `?${query}` : ""}`);
+  // Source focus belongs to the staged graph. A failed staging read is
+  // unknown, never an authoritative empty draft, so it cannot rewrite or
+  // erase the exact source the operator was editing.
+  if (rdStagingReachable) {
+    const currentSource = currentAuthoringSource();
+    const servedSource = v.source?.trim() || v.controllers?.source?.trim() || "";
+    if (servedSource && canonicalStagedSelectors.has(servedSource)) {
+      mergeSourceIntoUrl(servedSource, false);
+    } else if (!canonicalStagedSelectors.has(currentSource)) {
+      const fallback = canonicalStagedSelectors.values().next().value ?? "";
+      if (fallback) mergeSourceIntoUrl(fallback, false);
+      else if (currentSource) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("source");
+        const query = url.searchParams.toString();
+        window.history.replaceState(null, "", `${url.pathname}${query ? `?${query}` : ""}`);
+      }
     }
   }
   setRdDevScanLine(d?.scan_line ?? "");
@@ -1411,7 +1464,10 @@ export function applyRedesign(v: RedesignPayload): void {
     setRdKbMoreCls(board.kb_more_cls || "n-lgdmore none");
     setRdSoloLbl(board.solo_label || "Only this player");
   }
-  setRdCaptureRows(v.capture_rows ?? []);
+  applySharedPolicyRows(
+    v.capture_rows ?? [],
+    rdRoot?.classList.contains("js") === true,
+  );
   setRdCaptureNote(v.capture_note ?? "");
   // The mute/solo lens and the finish repaint follow every served update.
   applyControllerIdentityColors();
@@ -1533,11 +1589,11 @@ export function setRedesignRefreshHealth(
     alertMessage.textContent = message;
     alert.hidden = state === "online" || message.trim() === "";
   }
-  const summary = root.querySelector<HTMLElement>(".rd-setup-sum");
+  const summary = root.querySelector<HTMLElement>(".rd-profile-sum");
   if (summary) {
     summary.title = state === "stale" && message.trim()
-      ? `${message} Open Setup for details.`
-      : "Setup progress, draft, session and input readiness";
+      ? `${message} Workbench actions use the last confirmed state.`
+      : `${rdOpDraftLabel()}. ${rdOpSessionLine()}`;
   }
 }
 
@@ -1562,6 +1618,81 @@ function captureIdentityMatches(row: RdHeldCaptureRow): boolean {
  * machine to the selected input's healthy mode. */
 function additionalHeldCaptureRows(): RdHeldCaptureRow[] {
   return rdCaptureHeld().filter((row) => !captureIdentityMatches(row));
+}
+
+/** Held-device rows are immutable projections inside Forma's keyed list.
+ * Include every rendered identity, authority, and status fact so a passive
+ * refresh cannot preserve a stale disabled Release control or stale copy. */
+function heldCaptureRenderKey(row: RdHeldCaptureRow): string {
+  return JSON.stringify([
+    row.key,
+    row.name,
+    row.transport,
+    row.detail,
+    row.selector,
+    row.instance,
+    row.can_release,
+    row.note,
+    row.summary ?? "",
+    row.disabled === true,
+  ]);
+}
+
+interface HeldCaptureFocus {
+  element: HTMLElement;
+  key: string;
+  selector: string;
+  instance: string;
+  control: "row" | "consent" | "release";
+}
+
+/** A held row is keyed by mutable recovery truth so its disabled state and
+ * remedy can never go stale. Preserve the exact device that owned focus when
+ * that truthful repaint replaces the row; if its action becomes unavailable,
+ * the row itself remains the stable, readable destination. */
+function captureHeldRecoveryFocus(recovery: HTMLElement | null): HeldCaptureFocus | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !recovery?.contains(active)) return null;
+  const row = active.closest<HTMLElement>(
+    ".rd-held-row[data-held-key]",
+  );
+  const key = row?.dataset.heldKey ?? "";
+  const selector = row?.dataset.heldSelector ?? "";
+  const instance = row?.dataset.heldInstance ?? "";
+  if (!row || !key) return null;
+  const control = active.matches('input[name="confirm_release"]')
+    ? "consent"
+    : active.matches('button[type="submit"]')
+      ? "release"
+      : "row";
+  return { element: active, key, selector, instance, control };
+}
+
+function restoreHeldRecoveryFocus(snapshot: HeldCaptureFocus | null): void {
+  if (
+    !snapshot || snapshot.element.isConnected || document.activeElement !== document.body
+  ) return;
+  const row = Array.from(
+    rdRoot?.querySelectorAll<HTMLElement>(
+      ".rd-held-row[data-held-key]",
+    ) ?? [],
+  ).find((candidate) => candidate.dataset.heldKey === snapshot.key) ??
+    Array.from(
+      rdRoot?.querySelectorAll<HTMLElement>(
+        ".rd-held-row[data-held-selector][data-held-instance]",
+      ) ?? [],
+    ).find((candidate) =>
+      Boolean(snapshot.selector && snapshot.instance) &&
+      candidate.dataset.heldSelector === snapshot.selector &&
+      (candidate.dataset.heldInstance ?? "").toLowerCase() === snapshot.instance.toLowerCase()
+    );
+  if (!row) return;
+  const preferred = snapshot.control === "consent"
+    ? row.querySelector<HTMLElement>('input[name="confirm_release"]:not(:disabled)')
+    : snapshot.control === "release"
+      ? row.querySelector<HTMLElement>('button[type="submit"]:not(:disabled)')
+      : row;
+  (renderedFocusTarget(preferred) ? preferred : row).focus({ preventScroll: true });
 }
 
 // ── The canvas (extracted from the retired Nocturne implementation) ────────
@@ -1736,6 +1867,60 @@ const encoderWorkbenchSurfaces = new WeakMap<HTMLElement, EncoderWorkbenchSurfac
 let sourceSurfaceFingerprint = "";
 let keyboardSurfaceTemplate: HTMLElement | null = null;
 let sourceControlsSurface: HTMLElement | null = null;
+let sharedPolicyPositionFrame = 0;
+let sharedPolicyReturnOpener: HTMLButtonElement | null = null;
+let sharedPolicyReturnSelector = "";
+let sharedPolicyFocusRestoreFrame = 0;
+let suppressInspectorForDeviceControls = false;
+
+/** Policy rows are intentionally replaced when their checked/tab-stop facts
+ * change. Remember focus by the stable wire name, never by a DOM node that a
+ * poll is allowed to retire. */
+function focusedSharedPolicyName(): string {
+  const controls = sourceControlsSurface;
+  const active = document.activeElement;
+  if (!controls?.hasAttribute("open") || !(active instanceof HTMLButtonElement) ||
+      !controls.contains(active) || active.getAttribute("role") !== "radio") return "";
+  return active.closest("form")
+    ?.querySelector<HTMLInputElement>('input[name="blocking"]')?.value ?? "";
+}
+
+function sharedPolicyButtonByName(name: string): HTMLButtonElement | null {
+  if (!name || !sourceControlsSurface) return null;
+  for (const form of Array.from(
+    sourceControlsSurface.querySelectorAll<HTMLFormElement>(
+      'form[data-rd-form="blocking"]',
+    ),
+  )) {
+    const input = form.querySelector<HTMLInputElement>('input[name="blocking"]');
+    if (input?.value === name) return form.querySelector<HTMLButtonElement>('[role="radio"]');
+  }
+  return null;
+}
+
+function restoreSharedPolicyChoiceFocus(name: string): void {
+  if (!name || !sourceControlsSurface?.hasAttribute("open")) return;
+  const target = sharedPolicyButtonByName(name);
+  if (target) {
+    target.focus({ preventScroll: true });
+    return;
+  }
+  // A list effect is synchronous today, but the fallback makes the ownership
+  // guarantee survive a scheduler change without leaking focus to the canvas.
+  if (sharedPolicyFocusRestoreFrame) window.cancelAnimationFrame(sharedPolicyFocusRestoreFrame);
+  sharedPolicyFocusRestoreFrame = window.requestAnimationFrame(() => {
+    sharedPolicyFocusRestoreFrame = 0;
+    if (!sourceControlsSurface?.hasAttribute("open")) return;
+    sharedPolicyButtonByName(name)?.focus({ preventScroll: true });
+  });
+}
+
+function applySharedPolicyRows(rows: RdChoiceRowView[], roving: boolean): void {
+  const focusedName = focusedSharedPolicyName();
+  rdCaptureChoiceRows = rows;
+  setRdCaptureRows(renderedPolicyRows(rows, roving));
+  restoreSharedPolicyChoiceFocus(focusedName);
+}
 
 const REDESIGN_BROWSER_STORES = [
   RD_UI_STORE,
@@ -2132,6 +2317,13 @@ function keyboardEditingZoom(manualScale: number): number {
   );
 }
 
+function renderedDeviceScale(item: HTMLElement, fallback: number): number {
+  const attentionScale = Number(item.dataset.attentionScale);
+  return Number.isFinite(attentionScale) && attentionScale > 0
+    ? attentionScale
+    : fallback;
+}
+
 function canvasZoomFromViewport(
   viewport: HTMLElement | null = rdRoot?.querySelector<HTMLElement>(".forma-canvas-viewport") ?? null,
 ): number {
@@ -2139,10 +2331,64 @@ function canvasZoomFromViewport(
   return Number.isFinite(value) && value > 0 ? value : 1;
 }
 
+function deviceControlsLauncher(item: HTMLElement): HTMLButtonElement | null {
+  return item.querySelector<HTMLButtonElement>('[data-nx="rd-open-device-controls"]');
+}
+
+/** Dense device surfaces and their compact operational strip have different
+ * accessibility boundaries. At overview distance the painted board remains a
+ * useful object, while a fixed-screen-size launcher is the only honest target.
+ * Crossing into editing distance swaps the launcher for the real controls. */
+function syncDeviceOperationAccess(
+  item: HTMLElement,
+  operations: HTMLElement | null,
+  interactive: boolean,
+): void {
+  const launcher = deviceControlsLauncher(item);
+  const launcherHost = launcher?.closest<HTMLElement>("[data-rd-device-controls-launcher]") ?? null;
+  const active = item.ownerDocument.activeElement;
+  const focusWasInOperations = Boolean(
+    !interactive && operations && active instanceof Element && operations.contains(active),
+  );
+  const focusWasOnLauncher = Boolean(
+    interactive && launcher && active instanceof Element && launcher.contains(active),
+  );
+  const policyBelongsToOperations = Boolean(
+    !interactive && operations && sourceControlsSurface?.hasAttribute("open") &&
+      operations.contains(sourceControlsSurface),
+  );
+
+  if (policyBelongsToOperations) returnSharedPolicyEditor(false);
+  if (operations) {
+    if (!interactive) resetCaptureConfirmations(operations);
+    operations.hidden = !interactive;
+    operations.inert = !interactive;
+    if (interactive) operations.removeAttribute("aria-hidden");
+    else operations.setAttribute("aria-hidden", "true");
+  }
+  if (launcherHost) {
+    launcherHost.hidden = interactive;
+    launcherHost.inert = interactive;
+    if (interactive) launcherHost.setAttribute("aria-hidden", "true");
+    else launcherHost.removeAttribute("aria-hidden");
+  }
+  item.dataset.deviceOperationsInteractive = interactive ? "true" : "false";
+
+  if (focusWasInOperations) {
+    window.requestAnimationFrame(() => launcher?.focus({ preventScroll: true }));
+  } else if (focusWasOnLauncher) {
+    window.requestAnimationFrame(() => {
+      operations?.querySelector<HTMLElement>(
+        '[data-nx="rd-shared-policy"]:not(:disabled), [data-rd-device-capture] > summary',
+      )?.focus({ preventScroll: true });
+    });
+  }
+}
+
 /** Product encoders paint a useful board silhouette at every camera tier, but
- * their 56 native terminal controls are only honest targets at editing size.
- * `inert` keeps the visible schematic out of pointer and keyboard routing;
- * the item stamp also lets CSS collapse the supporting command chrome. */
+ * their native terminal controls are only honest targets at editing size.
+ * `inert` keeps the schematic out of pointer and keyboard routing while the
+ * exact Windows-input status remains reachable through the operation strip. */
 function syncEncoderEditingAccess(
   tier: string,
   zoom = canvasZoomFromViewport(),
@@ -2159,19 +2405,35 @@ function syncEncoderEditingAccess(
       ? attentionScale
       : Number.isFinite(manualScale) && manualScale > 0 ? manualScale : 1;
     const effectiveScale = zoom * renderedItemScale;
-    const editable = tier === "editing" && effectiveScale >= ENCODER_MIN_EFFECTIVE_EDIT_SCALE;
+    // A concrete row is positive connection evidence even when the other
+    // transport failed to enumerate. The aggregate scan flag licenses only
+    // absence; it must never turn a present encoder into an unknown one.
+    const sourceAvailable = rdStagingReachable && item.dataset.sourceEnabled === "true" &&
+      item.dataset.mappingAvailable === "true";
+    const atEditingScale = tier === "editing" &&
+      effectiveScale >= ENCODER_MIN_EFFECTIVE_EDIT_SCALE;
+    const editable = sourceAvailable && atEditingScale;
     item.dataset.encoderEditable = editable ? "true" : "false";
     const host = item.querySelector<HTMLElement>(
       '.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host',
     );
-    if (!host) continue;
-    const active = host.ownerDocument.activeElement;
-    if (!editable && active instanceof HTMLElement && host.contains(active)) {
-      item.focus({ preventScroll: true });
+    const operations = item.querySelector<HTMLElement>("[data-rd-device-operations]");
+    if (!host && !operations) continue;
+    const active = item.ownerDocument.activeElement;
+    const hostOwnedFocus = !editable && active instanceof HTMLElement && host?.contains(active);
+    if (host) {
+      host.inert = !editable;
+      if (editable) host.removeAttribute("aria-hidden");
+      else host.setAttribute("aria-hidden", "true");
     }
-    host.inert = !editable;
-    if (editable) host.removeAttribute("aria-hidden");
-    else host.setAttribute("aria-hidden", "true");
+    syncDeviceOperationAccess(item, operations, atEditingScale);
+    if (hostOwnedFocus) {
+      const launcher = deviceControlsLauncher(item);
+      const recovery = atEditingScale
+        ? operations?.querySelector<HTMLElement>("[data-rd-device-capture] > summary") ?? null
+        : launcher;
+      window.requestAnimationFrame(() => (recovery ?? item).focus({ preventScroll: true }));
+    }
   }
 }
 
@@ -2192,18 +2454,49 @@ function syncKeyboardEditingAccess(
       ? attentionScale
       : Number.isFinite(manualScale) && manualScale > 0 ? manualScale : 1;
     const effectiveScale = zoom * renderedItemScale;
+    const atEditingScale = tier === "editing" &&
+      effectiveScale >= keyboardMinEffectiveEditScale();
     const editable = item.dataset.sourceEnabled === "true" &&
-      tier === "editing" && effectiveScale >= keyboardMinEffectiveEditScale();
+      item.dataset.mappingAvailable === "true" && atEditingScale;
     item.dataset.keyboardEditable = editable ? "true" : "false";
     const surface = item.querySelector<HTMLElement>(KEYBOARD_SURFACE_SELECTOR);
-    if (!surface) continue;
-    const active = surface.ownerDocument.activeElement;
-    if (!editable && active instanceof HTMLElement && surface.contains(active)) {
-      item.focus({ preventScroll: true });
+    const operations = item.querySelector<HTMLElement>("[data-rd-device-operations]");
+    if (!surface && !operations) continue;
+    const active = item.ownerDocument.activeElement;
+    const surfaceOwnedFocus = !editable && active instanceof HTMLElement && surface?.contains(active);
+    if (surface) {
+      surface.inert = !editable;
+      if (editable) surface.removeAttribute("aria-hidden");
+      else surface.setAttribute("aria-hidden", "true");
     }
-    surface.inert = !editable;
-    if (editable) surface.removeAttribute("aria-hidden");
-    else surface.setAttribute("aria-hidden", "true");
+    syncDeviceOperationAccess(item, operations, atEditingScale);
+    if (surfaceOwnedFocus) {
+      const launcher = deviceControlsLauncher(item);
+      const recovery = atEditingScale
+        ? operations?.querySelector<HTMLElement>("[data-rd-device-capture] > summary") ?? null
+        : launcher;
+      window.requestAnimationFrame(() => (recovery ?? item).focus({ preventScroll: true }));
+    }
+  }
+  // A staged source that is temporarily disconnected has no trustworthy key
+  // surface to expose, but its recovery and removal controls still obey the
+  // same semantic-zoom contract as a connected keyboard. Keeping this here
+  // also lets the board retain its saved geometry while its presentation
+  // changes between connected and offline.
+  for (const item of root.querySelectorAll<HTMLElement>(".rd-offline-device-node")) {
+    const manualScale = Number(item.dataset.canvasManualScale);
+    const attentionScale = Number(item.dataset.attentionScale);
+    const renderedItemScale = Number.isFinite(attentionScale) && attentionScale > 0
+      ? attentionScale
+      : Number.isFinite(manualScale) && manualScale > 0 ? manualScale : 1;
+    const effectiveScale = zoom * renderedItemScale;
+    const atEditingScale = tier === "editing" &&
+      effectiveScale >= keyboardMinEffectiveEditScale();
+    syncDeviceOperationAccess(
+      item,
+      item.querySelector<HTMLElement>("[data-rd-device-operations]"),
+      atEditingScale,
+    );
   }
 }
 
@@ -3118,8 +3411,11 @@ function syncInspectorToSelection(items: HTMLElement[]): void {
     setInspector(false);
     return;
   }
-  if (items.length === 1 && items[0].classList.contains("rd-keyboard-device-node")) {
-    const selector = items[0].dataset.sourceId ?? items[0].dataset.selector ?? "";
+  const exactDevice = items.length === 1 && items[0].classList.contains("rd-dev-node")
+    ? items[0]
+    : null;
+  if (exactDevice?.classList.contains("rd-keyboard-device-node")) {
+    const selector = exactDevice.dataset.sourceId ?? exactDevice.dataset.selector ?? "";
     if (mergeSourceIntoUrl(selector)) {
       // Source focus is an editing context, never an exclusivity switch. An
       // armed gesture still belongs to the old context and must retire before
@@ -3128,12 +3424,27 @@ function syncInspectorToSelection(items: HTMLElement[]): void {
       void redesignRefreshFn();
     }
   }
+  if (exactDevice) {
+    // Physical inputs now own their policy and Windows-input operations on
+    // the board. Opening the generic geometry Inspector over those same
+    // controls makes visible actions unclickable (most obviously in Focus
+    // mode) and duplicates the device surface. A key-to-controller jump still
+    // selects the destination controller and opens its mapping Inspector.
+    setInspector(false);
+    return;
+  }
   // Composition gating lives in setInspector so direct widget actions obey
   // the same rule as ordinary selection changes.
   // Dismissal belongs to the selection that was on screen when X was
   // pressed. A later selection is a new editing intent and reopens the
   // inspector — otherwise its body silently updates while the panel stays
   // closed, with no visible way back in.
+  const boardPolicyOpen = sourceControlsSurface?.hasAttribute("open") === true &&
+    Boolean(sourceControlsSurface.closest(".rd-dev-node"));
+  if (suppressInspectorForDeviceControls || boardPolicyOpen) {
+    setInspector(false);
+    return;
+  }
   setInspector(true);
 }
 
@@ -3290,11 +3601,59 @@ function benchSelectors(): string[] {
 const legacyGeometryOwners = new Map<string, string>();
 
 function deviceRowFor(selector: string): RdDeviceRowView | undefined {
-  return [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()].find((r) => r.selector === selector);
+  return rdDeviceRowsSnapshot.find((r) => r.selector === selector);
+}
+
+/** Forma's keyed list reuses a row when this value is unchanged. Include all
+ * identity/capture presentation facts so a Prepare/Release or reconnect poll
+ * cannot leave the picker showing the preceding generation's badges. */
+function deviceRowRenderKey(row: RdDeviceRowView): string {
+  return JSON.stringify([
+    row.selector,
+    row.name,
+    row.meta,
+    row.cls,
+    row.title,
+    row.role,
+    row.aria_current,
+    row.connection_label,
+    row.connection_badge,
+    row.connection_state,
+    row.instance_id ?? "",
+    row.capture_badge,
+    row.capture_state,
+    row.capture_cls,
+  ]);
+}
+
+/** Absence is authoritative only for the transport that owns the selector.
+ * Opaque selectors cannot be attributed safely, so they retain the stricter
+ * aggregate answer. Present rows prove themselves independently. */
+function deviceSelectorScanAuthoritative(selector: string): boolean {
+  const normalized = selector.trim();
+  const upper = normalized.toUpperCase();
+  if (normalized.toLowerCase().startsWith("usb:") || upper.startsWith("USB\\")) {
+    return rdUsbScanAuthoritative;
+  }
+  if (upper.startsWith("BTHENUM\\")) return rdBluetoothScanAuthoritative;
+  return rdDeviceScanAuthoritative;
 }
 
 function deviceRowConnected(row: RdDeviceRowView | undefined): boolean {
-  return rdDeviceScanAuthoritative && Boolean(row) && row?.role !== "offline-source";
+  return Boolean(row) && row?.role !== "offline-source";
+}
+
+/** A present row proves its own state. A missing row is known only when its
+ * transport answered (or every transport answered for an opaque selector). */
+function deviceRowConnectionKnown(
+  row: RdDeviceRowView | undefined,
+  selector = row?.selector ?? "",
+): boolean {
+  return Boolean(row) || deviceSelectorScanAuthoritative(selector);
+}
+
+function deviceRowIdentityAuthoritative(row: RdDeviceRowView): boolean {
+  return row.role !== "offline-source" && Boolean(row.instance_id?.trim());
 }
 
 /** Canvas chrome names a physical endpoint, not merely its product model.
@@ -3303,10 +3662,9 @@ function deviceRowConnected(row: RdDeviceRowView | undefined): boolean {
  * presentation only -- actions still carry the untouched selector. */
 function deviceCanvasLabel(row: RdDeviceRowView): string {
   const name = row.name.trim() || row.label.trim() || row.alias.trim() || "Physical device";
-  const peers = [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()];
+  const peers = rdDeviceRowsSnapshot;
   const isTwin = peers.some((candidate) =>
     candidate.selector !== row.selector &&
-    candidate.role === row.role &&
     candidate.name.trim().toLocaleLowerCase() === row.name.trim().toLocaleLowerCase()
   );
   if (!isTwin) return name;
@@ -3361,7 +3719,7 @@ function deviceCardPurpose(row: RdDeviceRowView): string {
   if (row.role === "offline-source") {
     return "This exact source is still in the mapping draft. Reconnect it to resume input, or remove it here; peer sources and controllers remain unchanged.";
   }
-  const authorityUnknown = !rdDeviceScanAuthoritative || !rdStagingReachable;
+  const authorityUnknown = !rdStagingReachable;
   if (authorityUnknown) {
     const kind = row.role === "keyboard" ? "physical keyboard" : "encoder";
     if (row.role === "keyboard") {
@@ -3399,7 +3757,10 @@ interface RdDeviceStateBadge {
 /** One vocabulary for device state everywhere it appears. A board can hold
  * several independent facts at once (connected + on canvas + mapping source),
  * so these are badges rather than one lossy status sentence. */
-function deviceStateBadges(row: RdDeviceRowView): RdDeviceStateBadge[] {
+function deviceStateBadges(
+  row: RdDeviceRowView,
+  connectionKnown = true,
+): RdDeviceStateBadge[] {
   const badges: RdDeviceStateBadge[] = [];
   if (row.role === "offline-source") {
     badges.push({ label: "Disconnected", state: "attention" });
@@ -3407,10 +3768,10 @@ function deviceStateBadges(row: RdDeviceRowView): RdDeviceStateBadge[] {
     badges.push({ label: "Independent source", state: "source" });
     return badges;
   }
-  if (rdDeviceScanAuthoritative) badges.push({ label: "Connected", state: "connected" });
+  if (connectionKnown) badges.push({ label: "Connected", state: "connected" });
   badges.push({ label: "On canvas", state: "canvas" });
   if (row.role === "keyboard") {
-    if (!rdDeviceScanAuthoritative || !rdStagingReachable) {
+    if (!connectionKnown || !rdStagingReachable) {
       badges.push({ label: "Source status unavailable", state: "attention" });
       return badges;
     }
@@ -3422,7 +3783,7 @@ function deviceStateBadges(row: RdDeviceRowView): RdDeviceStateBadge[] {
   }
   if (row.aria_current !== "true") return badges;
 
-  if (!rdDeviceScanAuthoritative || !rdStagingReachable) {
+  if (!connectionKnown || !rdStagingReachable) {
     badges.push({ label: "Source status unavailable", state: "attention" });
     return badges;
   }
@@ -3437,11 +3798,15 @@ function deviceStateBadges(row: RdDeviceRowView): RdDeviceStateBadge[] {
   return badges;
 }
 
-function syncDeviceCardStateBadges(item: HTMLElement, row: RdDeviceRowView): void {
+function syncDeviceCardStateBadges(
+  item: HTMLElement,
+  row: RdDeviceRowView,
+  connectionKnown = true,
+): void {
   const list = item.querySelector<HTMLElement>(".rd-devcard-states");
   if (!list) return;
   list.replaceChildren(
-    ...deviceStateBadges(row).map((badge) => {
+    ...deviceStateBadges(row, connectionKnown).map((badge) => {
       const chip = document.createElement("span");
       chip.className = "rd-device-state";
       chip.dataset.state = badge.state;
@@ -3508,6 +3873,381 @@ function deviceCardContent(row: RdDeviceRowView): HTMLElement {
   return body;
 }
 
+interface RdSharedPolicyPresentation {
+  mode: string;
+  label: string;
+  effect: string;
+}
+
+function sharedPolicyPresentation(role: string): RdSharedPolicyPresentation {
+  const current = rdCaptureRows().find((row) => row.chosen === "true");
+  const mode = current?.name ?? "";
+  const genericSource = role === "offline-source";
+  if (mode === "whole") {
+    return {
+      mode,
+      label: role === "panel-encoder"
+        ? "Take all · dedicated panel"
+        : genericSource ? "Take all" : "Take all · freeze",
+      effect: genericSource
+        ? "Every routed input is reserved for ksx while Play runs."
+        : role === "panel-encoder"
+        ? "Every routed signal is reserved for ksx while Play runs."
+        : "Every key on this routed keyboard is reserved for ksx while Play runs.",
+    };
+  }
+  if (mode === "bound-keys") {
+    return {
+      mode,
+      label: "Split",
+      effect: genericSource
+        ? "Mapped input is reserved; everything else still reaches Windows."
+        : role === "panel-encoder"
+        ? "Mapped signals are reserved; unused outputs still pass to Windows."
+        : "Mapped keys are reserved; every other key still types in Windows.",
+    };
+  }
+  if (mode === "off") {
+    return {
+      mode,
+      label: "Pass through",
+      effect: genericSource
+        ? "Mapped input drives controllers and still reaches Windows."
+        : role === "panel-encoder"
+        ? "Mapped signals drive controllers and still reach Windows."
+        : "Mapped keys drive controllers and continue typing in Windows.",
+    };
+  }
+  return {
+    mode: "unset",
+    label: "Choose before Play",
+    effect: "Take all, Split, or Pass through will apply to every routed input.",
+  };
+}
+
+function hasCanonicalStagedSource(): boolean {
+  return rdDeviceRowsSnapshot.some(
+    (row) => row.aria_current === "true",
+  ) || rdCtrlPads.some((pad) => (pad.sources ?? []).length > 0);
+}
+
+/** Board-local policy is the product path. If the discovery provider cannot
+ * mount an exact board while the staging graph still has sources, Profile
+ * exposes one compact recovery door so an unset staging-owned policy cannot
+ * permanently block Save and Play. */
+function syncProfilePolicyFallback(): void {
+  const root = rdRoot;
+  if (!root) return;
+  const fallback = root.querySelector<HTMLElement>("[data-rd-profile-policy-fallback]");
+  if (!fallback) return;
+  const boardOpener = root.querySelector(
+    '.rd-device-operations [data-nx="rd-shared-policy"]',
+  );
+  const show = !boardOpener && rdStagingReachable && hasCanonicalStagedSource();
+  if (!show && fallback.contains(sourceControlsSurface)) returnSharedPolicyEditor(false);
+  fallback.hidden = !show;
+  fallback.inert = !show;
+  if (show) fallback.removeAttribute("aria-hidden");
+  else fallback.setAttribute("aria-hidden", "true");
+
+  const policy = sharedPolicyPresentation("offline-source");
+  const current = fallback.querySelector<HTMLElement>("[data-rd-policy-current]");
+  const effect = fallback.querySelector<HTMLElement>("[data-rd-policy-effect]");
+  const change = fallback.querySelector<HTMLButtonElement>('[data-nx="rd-shared-policy"]');
+  if (current) current.textContent = policy.label;
+  if (effect) effect.textContent = policy.effect;
+  if (change) {
+    const productDisabled = !rdStagingReachable;
+    change.dataset.rdProductDisabled = String(productDisabled);
+    change.disabled = productDisabled || root.dataset.rdMutationPending === "true";
+    change.title = change.disabled
+      ? "The mapping draft is unavailable. Reconnect it before changing Play behavior."
+      : "Change the one policy shared by every routed input.";
+  }
+}
+
+function appendHiddenField(form: HTMLFormElement, name: string, value: string): void {
+  const input = document.createElement("input");
+  input.type = "hidden";
+  input.name = name;
+  input.value = value;
+  form.append(input);
+}
+
+function appendConsent(
+  form: HTMLFormElement,
+  name: string,
+  copy: string,
+  compact = false,
+  disabled = false,
+): void {
+  const label = document.createElement("label");
+  label.className = compact ? "rd-consent compact" : "rd-consent";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.name = name;
+  input.value = "yes";
+  input.required = true;
+  input.disabled = disabled;
+  const text = document.createElement("span");
+  text.textContent = copy;
+  label.append(input, text);
+  form.append(label);
+}
+
+function captureModeLabel(row: RdDeviceRowView): string {
+  if (row.capture_badge.trim()) return row.capture_badge;
+  switch (row.capture_mode) {
+    case "prepare": return "Preparation required";
+    case "prepare-optional": return "Windows input ready";
+    case "release": return "Prepared";
+    case "held": return "Needs recovery";
+    case "blocked": return "Identity not verified";
+    case "ready": return "Windows input ready";
+    default: return row.aria_current === "true" ? "Checking capture path" : "Not in draft";
+  }
+}
+
+function createDeviceCapturePanel(row: RdDeviceRowView): HTMLDetailsElement {
+  const identityAuthoritative = deviceRowIdentityAuthoritative(row);
+  const deviceLabel = deviceCanvasLabel(row);
+  const details = document.createElement("details");
+  details.className = "rd-device-capture";
+  details.dataset.rdDeviceCapture = "";
+  details.dataset.captureMode = row.capture_mode || "none";
+  details.dataset.captureState = row.capture_state || "";
+
+  const summary = document.createElement("summary");
+  const label = document.createElement("span");
+  label.className = "rd-device-capture-label";
+  label.textContent = "Windows input";
+  const state = document.createElement("strong");
+  state.className = "rd-device-capture-state";
+  state.textContent = captureModeLabel(row);
+  const action = document.createElement("span");
+  action.className = "rd-device-capture-action";
+  action.textContent = row.role === "offline-source"
+    ? "Reconnect required"
+    : row.capture_action_label ||
+      (row.capture_can_prepare ? "Prepare…" : row.capture_can_release ? "Release…" : "Details");
+  summary.setAttribute(
+    "aria-label",
+    `Windows input for ${deviceLabel}: ${state.textContent}`,
+  );
+  summary.append(label, state, action);
+
+  const body = document.createElement("div");
+  body.className = "rd-device-capture-body";
+  const detail = document.createElement("p");
+  detail.textContent = row.role === "offline-source"
+    ? "Reconnect this exact input to inspect, prepare, or release its Windows capture path."
+    : row.capture_detail ||
+      (row.aria_current === "true"
+        ? "ksx verifies this exact device before Save or Play."
+        : "Add this device to the mapping draft before changing its capture path.");
+  body.append(detail);
+
+  if (row.role !== "offline-source" && row.capture_can_prepare) {
+    const form = document.createElement("form");
+    form.method = "post";
+    form.action = "/redesign/capture/prepare";
+    form.dataset.rdForm = "capture-prepare";
+    form.dataset.rdCaptureAllowed = String(identityAuthoritative);
+    appendHiddenField(form, "expected_selector", row.selector);
+    appendHiddenField(form, "instance_id", row.instance_id ?? "");
+    appendConsent(form, "confirm_spare_keyboard", "I connected and tested a different keyboard that can still type.", false, !identityAuthoritative);
+    appendConsent(form, "confirm_rebind", "I understand this exact input stops ordinary typing until I release it here.", false, !identityAuthoritative);
+    appendConsent(form, "confirm_machine_certificate", "I allow ksx to install its machine-local signing certificate for this generated driver package.", false, !identityAuthoritative);
+    const button = document.createElement("button");
+    button.type = "submit";
+    button.className = "rd-panel-action primary";
+    button.disabled = !identityAuthoritative;
+    if (!identityAuthoritative) {
+      button.title = "Device identity is temporarily unavailable. Check again before preparing it.";
+    }
+    const settled = document.createElement("span");
+    settled.className = "rd-action-label";
+    settled.textContent = row.capture_action_label || "Prepare this input";
+    button.setAttribute("aria-label", `${settled.textContent} for ${deviceLabel}`);
+    const pending = document.createElement("span");
+    pending.className = "rd-action-pending";
+    pending.hidden = true;
+    pending.textContent = "Preparing…";
+    button.append(settled, pending);
+    form.append(button);
+    body.append(form);
+  } else if (row.role !== "offline-source" && row.capture_can_release) {
+    const form = document.createElement("form");
+    form.method = "post";
+    form.action = "/redesign/capture/release";
+    form.dataset.rdForm = "capture-release";
+    form.dataset.rdCaptureAllowed = String(identityAuthoritative);
+    appendHiddenField(form, "expected_selector", row.selector);
+    appendHiddenField(form, "instance_id", row.instance_id ?? "");
+    appendConsent(form, "confirm_release", "Return this exact input to ordinary Windows use", true, !identityAuthoritative);
+    const button = document.createElement("button");
+    button.type = "submit";
+    button.className = "rd-panel-action";
+    button.disabled = !identityAuthoritative;
+    if (!identityAuthoritative) {
+      button.title = "Device identity is temporarily unavailable. Check again before releasing it.";
+    }
+    const settled = document.createElement("span");
+    settled.className = "rd-action-label";
+    settled.textContent = row.capture_action_label || "Release this input";
+    button.setAttribute("aria-label", `${settled.textContent} for ${deviceLabel}`);
+    const pending = document.createElement("span");
+    pending.className = "rd-action-pending";
+    pending.hidden = true;
+    pending.textContent = "Releasing…";
+    button.append(settled, pending);
+    form.append(button);
+    body.append(form);
+  }
+  details.append(summary, body);
+  return details;
+}
+
+/** A retained board can outlive one refused transport scan. Replace its last
+ * prepared/release snapshot rather than merely disabling stale controls: the
+ * board still exists, but Windows capture authority is currently unknown. */
+function syncUnavailableDeviceCapturePanel(
+  strip: HTMLElement,
+  deviceLabel: string,
+): void {
+  const fingerprint = `unavailable|${deviceLabel}|${rdDevScanLine()}`;
+  const old = strip.querySelector<HTMLDetailsElement>("[data-rd-device-capture]");
+  if (!old || old.dataset.captureFingerprint === fingerprint) return;
+  const ownedFocus = old.contains(document.activeElement);
+  resetCaptureConfirmations(old);
+  old.dataset.captureMode = "unavailable";
+  old.dataset.captureState = "attention";
+  old.dataset.captureFingerprint = fingerprint;
+  const summary = old.querySelector<HTMLElement>(":scope > summary");
+  if (!summary) return;
+  summary.setAttribute(
+    "aria-label",
+    `Windows input for ${deviceLabel}: status unavailable`,
+  );
+  const state = summary.querySelector<HTMLElement>(".rd-device-capture-state");
+  const action = summary.querySelector<HTMLElement>(".rd-device-capture-action");
+  if (state) state.textContent = "Status unavailable";
+  if (action) action.textContent = "Check connection";
+  const body = old.querySelector<HTMLElement>(".rd-device-capture-body");
+  const detail = document.createElement("p");
+  detail.textContent =
+    `KSX could not confirm ${deviceLabel} in the latest device scan. ` +
+    "Prepare and Release stay paused until this exact connection is verified again.";
+  body?.replaceChildren(detail);
+  if (ownedFocus) {
+    window.requestAnimationFrame(() => {
+      summary.focus({ preventScroll: true });
+      rdAnnounce(`${deviceLabel} Windows input status is unavailable.`);
+    });
+  }
+}
+
+function createDeviceOperationStrip(row: RdDeviceRowView): HTMLElement {
+  const strip = document.createElement("section");
+  strip.className = "rd-device-operations";
+  strip.dataset.rdDeviceOperations = "";
+
+  const policy = document.createElement("div");
+  policy.className = "rd-device-policy";
+  const heading = document.createElement("span");
+  heading.className = "rd-device-policy-label";
+  heading.textContent = "During Play · all routed inputs";
+  const current = document.createElement("strong");
+  current.dataset.rdPolicyCurrent = "";
+  const effect = document.createElement("span");
+  effect.dataset.rdPolicyEffect = "";
+  const change = document.createElement("button");
+  change.type = "button";
+  change.className = "rd-policy-change";
+  change.dataset.nx = "rd-shared-policy";
+  change.textContent = "Change for all";
+  change.setAttribute("aria-haspopup", "dialog");
+  change.setAttribute("aria-controls", "rd-shared-policy-editor");
+  change.setAttribute("aria-expanded", "false");
+  const editorHost = document.createElement("div");
+  editorHost.className = "rd-policy-editor-host";
+  editorHost.dataset.rdPolicyEditorHost = "";
+  policy.append(heading, current, effect, change, editorHost);
+
+  strip.append(policy, createDeviceCapturePanel(row));
+  syncDeviceOperationStrip(strip, row);
+  return strip;
+}
+
+/** The board keeps one real, screen-sized door into controls when semantic
+ * zoom hides the dense surface. It lives in widget chrome so its hit target is
+ * corrected by the canvas engine's inverse-scale token. */
+function attachDeviceControlsLauncher(item: HTMLElement, row: RdDeviceRowView): void {
+  const chrome = item.querySelector<HTMLElement>(":scope > .widget-chrome");
+  if (!chrome || deviceControlsLauncher(item)) return;
+  const host = document.createElement("div");
+  host.className = "rd-device-controls-launcher-host";
+  host.dataset.rdDeviceControlsLauncher = "";
+  host.hidden = true;
+  host.inert = true;
+  host.setAttribute("aria-hidden", "true");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "rd-device-controls-launcher";
+  button.dataset.nx = "rd-open-device-controls";
+  button.textContent = "Open controls";
+  const label = deviceCanvasLabel(row);
+  button.setAttribute("aria-label", `Open ${label} controls`);
+  button.title = `Zoom in and open ${label}'s controls`;
+  host.append(button);
+  chrome.append(host);
+}
+
+function syncDeviceOperationStrip(strip: HTMLElement, row: RdDeviceRowView): void {
+  const policy = sharedPolicyPresentation(row.role);
+  strip.dataset.policyMode = policy.mode;
+  const current = strip.querySelector<HTMLElement>("[data-rd-policy-current]");
+  const effect = strip.querySelector<HTMLElement>("[data-rd-policy-effect]");
+  const change = strip.querySelector<HTMLButtonElement>('[data-nx="rd-shared-policy"]');
+  if (current) current.textContent = policy.label;
+  if (effect) effect.textContent = policy.effect;
+  if (change) {
+    const productDisabled = row.aria_current !== "true" || !rdStagingReachable;
+    change.dataset.rdProductDisabled = String(productDisabled);
+    change.disabled = productDisabled || rdRoot?.dataset.rdMutationPending === "true";
+    change.title = change.disabled
+      ? "Add this device to the draft before changing Play behavior."
+      : "Change the one policy shared by every routed input.";
+  }
+
+  const captureFingerprint = [
+    row.selector,
+    row.instance_id ?? "",
+    row.capture_mode ?? "",
+    row.capture_badge ?? "",
+    row.capture_state ?? "",
+    row.capture_detail ?? "",
+    row.capture_action_label ?? "",
+    row.capture_can_prepare ? "prepare" : "",
+    row.capture_can_release ? "release" : "",
+    deviceRowIdentityAuthoritative(row) ? "identity-ready" : "identity-unknown",
+    deviceCanvasLabel(row),
+  ].join("|");
+  const old = strip.querySelector<HTMLDetailsElement>("[data-rd-device-capture]");
+  if (old?.dataset.captureFingerprint === captureFingerprint) return;
+  const ownedFocus = old?.contains(document.activeElement) === true;
+  const replacement = createDeviceCapturePanel(row);
+  replacement.dataset.captureFingerprint = captureFingerprint;
+  if (old?.open) replacement.open = true;
+  old?.replaceWith(replacement);
+  if (ownedFocus) {
+    window.requestAnimationFrame(() => {
+      replacement.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+      rdAnnounce(`${deviceCanvasLabel(row)} capture state updated. Review the latest device status.`);
+    });
+  }
+}
+
 /** A physical keyboard is one canvas object: its identity and one persistent
  * full keyboard surface. The hidden reactive blueprint is cloned exactly once
  * per intentionally added device; no peer ever borrows this subtree. */
@@ -3521,14 +4261,13 @@ function keyboardDeviceContent(row: RdDeviceRowView, instanceId: string): HTMLEl
       sourceId: row.selector,
       instanceId,
       sourceLabel: deviceCanvasLabel(row),
-      mappingAvailable: row.aria_current === "true" &&
-        rdDeviceScanAuthoritative && rdStagingReachable,
+      mappingAvailable: row.aria_current === "true" && rdStagingReachable,
     }));
   }
   const mappingStatus = document.createElement("p");
   mappingStatus.className = "rd-keyboard-mapping-status";
   mappingStatus.dataset.rdKeyboardMappingStatus = "";
-  shell.append(host, mappingStatus);
+  shell.append(host, mappingStatus, createDeviceOperationStrip(row));
   return shell;
 }
 
@@ -3583,22 +4322,28 @@ function mountDeviceWidget(
       },
     })
     : null;
+  const offlineSurface = row.role === "offline-source";
   const content = encoderSurface
     ? document.createElement("div")
     : row.role === "keyboard"
       ? keyboardDeviceContent(row, slug)
-      : deviceCardContent(row);
+      : offlineSurface
+        ? document.createElement("div")
+        : deviceCardContent(row);
   if (encoderSurface) {
     content.className = "rd-encoder-device-shell";
-    content.append(deviceCardContent(row), encoderSurface.content);
+    content.append(deviceCardContent(row), encoderSurface.content, createDeviceOperationStrip(row));
+  } else if (offlineSurface) {
+    content.className = "rd-offline-device-shell";
+    content.append(deviceCardContent(row), createDeviceOperationStrip(row));
   }
   const preferredWidth = encoderSurface
     ? 960
     : row.role === "keyboard"
       ? KEYBOARD_DEVICE_WIDTH
-      : row.role === "offline-source" && isGeometry(selectorGeometry)
-        ? selectorGeometry.width
-        : 300;
+    : offlineSurface
+      ? Math.max(640, isGeometry(selectorGeometry) ? selectorGeometry.width : 0)
+      : 300;
   // Match the canvas engine's effective minimum exactly. Supplying a smaller
   // candidate makes collision allocation reason about geometry it will later
   // clamp, which can leave fresh rows closer than the engine's 40 px gap.
@@ -3606,12 +4351,15 @@ function mountDeviceWidget(
     ? 900
     : row.role === "keyboard"
       ? KEYBOARD_DEVICE_MIN_HEIGHT
-      : DEVICE_CARD_MIN_HEIGHT;
+      : offlineSurface ? 360 : DEVICE_CARD_MIN_HEIGHT;
   const item = createCanvasItem({
     instanceId: slug,
     displayName: deviceCanvasLabel(row),
     preferredWidth,
     minHeight,
+    // The offline recovery presentation keeps the physical board's saved
+    // hull; allowing its shorter copy to remeasure the item loses geometry
+    // on every disconnect/reconnect transition.
     intrinsicHeight: row.role === "keyboard",
     content,
     document,
@@ -3637,6 +4385,10 @@ function mountDeviceWidget(
   if (encoderSurface) {
     item.classList.add("rd-encoder-device-node");
     encoderWorkbenchSurfaces.set(item, encoderSurface);
+  }
+  if (offlineSurface) item.classList.add("rd-offline-device-node");
+  if (row.role === "keyboard" || encoderSurface || offlineSurface) {
+    attachDeviceControlsLauncher(item, row);
   }
   const home: CanvasItemGeometry = {
     x: 140 + (index % 3) * (preferredWidth + CANVAS_FRESH_PLACEMENT_GAP),
@@ -3715,6 +4467,12 @@ function mountDeviceWidget(
           canvasZoomFromViewport(viewport),
         );
       }
+    } else if (row.role === "keyboard" || offlineSurface) {
+      const viewport = (rdRoot ?? document).querySelector<HTMLElement>(".forma-canvas-viewport");
+      syncKeyboardEditingAccess(
+        viewport?.dataset.canvasZoomTier ?? "editing",
+        canvasZoomFromViewport(viewport),
+      );
     }
   } catch (error) {
     disposeEncoderWorkbenchItem(item);
@@ -3774,6 +4532,13 @@ async function toggleBenchDevice(selector: string): Promise<void> {
   const row = deviceRowFor(selector);
   if (!row) return;
   if (bench.includes(selector)) {
+    const mountedBeforeMutation = benchItemEl(selector);
+    const restoreOfflineRemovalFocus = row.role === "offline-source" &&
+      Boolean(
+        mountedBeforeMutation && document.activeElement instanceof Node &&
+          (document.activeElement === mountedBeforeMutation ||
+            mountedBeforeMutation.contains(document.activeElement)),
+      );
     const usage = deviceRouteUsage(selector);
     const hasMappings = usage.bindings > 0 || usage.macros > 0;
     if (hasMappings) {
@@ -3794,11 +4559,48 @@ async function toggleBenchDevice(selector: string): Promise<void> {
     ) return;
     const item = benchItemEl(selector);
     if (item) {
+      if (item.contains(sourceControlsSurface)) returnSharedPolicyEditor();
+      resetCaptureConfirmations(item);
       rememberDeviceGeometry(item);
       disposeEncoderWorkbenchItem(item);
       nCanvas?.removeItem(item, { selectFallback: false });
     }
     canvasPrefs.bench = bench.filter((s) => s !== selector);
+    if (restoreOfflineRemovalFocus) {
+      window.requestAnimationFrame(() => {
+        const root = rdRoot;
+        const active = document.activeElement;
+        // Do not steal focus when the operator moved elsewhere while the
+        // guarded request was in flight. Body/the canvas viewport are the two
+        // detached-control fallbacks produced by browser and canvas removal.
+        if (
+          !root || (active !== document.body &&
+            !active?.classList.contains("forma-canvas-viewport"))
+        ) return;
+        const survivingDevice = Array.from(
+          root.querySelectorAll<HTMLElement>(".forma-canvas-stage > .rd-dev-node"),
+        ).find((candidate) => candidate.isConnected && !candidate.inert);
+        const survivingController = Array.from(
+          root.querySelectorAll<HTMLElement>(
+            '.forma-canvas-stage > [data-instance-id^="ctrl-slot-"]',
+          ),
+        ).find((candidate) => candidate.isConnected && !candidate.inert);
+        const survivor = survivingDevice ?? survivingController;
+        if (survivor && nCanvas) {
+          suppressInspectorForDeviceControls = true;
+          try {
+            nCanvas.setActive(survivor, { raiseIfNeeded: true });
+          } finally {
+            suppressInspectorForDeviceControls = false;
+          }
+          setInspector(false);
+          survivor.focus({ preventScroll: true });
+          return;
+        }
+        root.querySelector<HTMLElement>('[data-nx="rd-devs-open"]')
+          ?.focus({ preventScroll: true });
+      });
+    }
   } else {
     if (
       row.aria_current !== "true" &&
@@ -3900,7 +4702,9 @@ function removeEncoderProfileLab(): void {
 }
 
 function encoderProfileLabDevices(): EncoderProfileLabDevice[] {
-  return rdDevEnc().map(encoderDeviceFromRow);
+  return rdDeviceRowsSnapshot
+    .filter((row) => row.role === "panel-encoder")
+    .map(encoderDeviceFromRow);
 }
 
 function mountEncoderProfileLab(): void {
@@ -3972,12 +4776,13 @@ function reconcileBenchWithRoster(): void {
 
   let benchOrder = benchSelectors();
   let membershipChanged = false;
-  if (rdStagingReachable && rdDeviceScanAuthoritative) {
-    const rows = [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()];
+  if (rdStagingReachable) {
+    const rows = rdDeviceRowsSnapshot;
     const visible = new Map(rows.map((row) => [row.selector, row] as const));
-    // A missing row may be a temporarily disconnected board; retain its
-    // latent reconnect intent. A PRESENT row marked unstaged is conclusive:
-    // Start over, daemon restart, or an external Remove must clear the node.
+    // A PRESENT row marked unstaged is conclusive even if the other transport
+    // failed. A missing row keeps its latent canvas membership so reconnect
+    // can restore the exact geometry; that selector's transport authority
+    // below decides only whether its mounted presentation must disappear.
     const next = benchOrder.filter((selector) => {
       const row = visible.get(selector);
       return !row || row.aria_current === "true";
@@ -4006,13 +4811,15 @@ function reconcileBenchWithRoster(): void {
     const row = deviceRowFor(selector);
     const presentationMatches = !row || (
       item.classList.contains("rd-encoder-device-node") === (row.role === "panel-encoder") &&
-      item.classList.contains("rd-keyboard-device-node") === (row.role === "keyboard")
+      item.classList.contains("rd-keyboard-device-node") === (row.role === "keyboard") &&
+      item.classList.contains("rd-offline-device-node") === (row.role === "offline-source")
     );
     // A refused scan is UNKNOWN, not an authoritative empty roster. Keep the
     // remembered card mounted and let syncBenchCards mark its status unknown.
     if (
       bench.has(selector) &&
-      ((row && presentationMatches) || (!row && !rdDeviceScanAuthoritative))
+      ((row && presentationMatches) ||
+        (!row && !deviceSelectorScanAuthoritative(selector)))
     ) continue;
     const instanceId = item.dataset.instanceId ?? "";
     if (selectedIds.includes(instanceId)) selectedPresentationChanged = true;
@@ -4020,6 +4827,8 @@ function reconcileBenchWithRoster(): void {
       focusedBefore instanceof Node &&
       (focusedBefore === item || item.contains(focusedBefore))
     ) focusedPresentationId = instanceId;
+    if (item.contains(sourceControlsSurface)) returnSharedPolicyEditor();
+    resetCaptureConfirmations(item);
     rememberDeviceGeometry(item);
     disposeEncoderWorkbenchItem(item);
     canvas.removeItem(item, { selectFallback: false });
@@ -4079,8 +4888,8 @@ function reconcileBenchWithRoster(): void {
 /** One deterministic recipient for the pre-device synthetic keyboard geometry.
  * This is migration bookkeeping only; it grants no mapping exclusivity. */
 function compatibilityMappingItem(): HTMLElement | null {
-  if (!rdDeviceScanAuthoritative || !rdStagingReachable) return null;
-  const staged = [...rdDevKb(), ...rdDevEnc(), ...rdDevExp()].filter(
+  if (!rdStagingReachable) return null;
+  const staged = rdDeviceRowsSnapshot.filter(
     (row) => row.aria_current === "true",
   );
   const current = currentAuthoringSource();
@@ -4202,7 +5011,10 @@ function syncKeyboardDevicePresentation(): void {
     "[data-rd-global-source-controls-host]",
   );
   if (controls && globalControlsHost) {
-    if (controls.parentElement !== globalControlsHost) globalControlsHost.append(controls);
+    const attachedToBoard = Boolean(controls.closest("[data-rd-policy-editor-host]"));
+    if (!attachedToBoard && controls.parentElement !== globalControlsHost) {
+      globalControlsHost.append(controls);
+    }
     controls.hidden = false;
     controls.inert = false;
     controls.removeAttribute("aria-hidden");
@@ -4214,8 +5026,7 @@ function syncKeyboardDevicePresentation(): void {
     const selector = item.dataset.selector ?? "";
     const row = deviceRowFor(selector);
     const sourceEnabled = deviceRowConnected(row);
-    const mappingAvailable = sourceEnabled && rdStagingReachable &&
-      row?.aria_current === "true";
+    const mappingAvailable = sourceEnabled && rdStagingReachable && row?.aria_current === "true";
     item.dataset.sourceId = selector;
     item.dataset.sourceAlias = row?.alias ?? "";
     item.dataset.sourceInstance = row?.instance_id ?? "";
@@ -4264,7 +5075,9 @@ function syncKeyboardDevicePresentation(): void {
           ? selector === currentAuthoringSource()
             ? "Independent source · selected for mapping edits."
             : "Independent source · click this keyboard to edit its mappings."
-          : "On canvas · add this keyboard to the draft before mapping it.";
+          : !rdStagingReachable
+            ? "Mapping unavailable · the draft service did not answer. Studio reconnects automatically; exact Windows input controls remain available."
+            : "On canvas · add this keyboard to the draft before mapping it.";
     }
   }
   const nextFingerprint = Array.from(
@@ -4306,20 +5119,22 @@ function syncBenchCards(): void {
     const meta = item.querySelector<HTMLElement>(".rd-devcard-meta");
     const purpose = item.querySelector<HTMLElement>(".rd-devcard-purpose");
     const stageButton = item.querySelector<HTMLButtonElement>(".rd-stagebtn");
-    const actionAvailable = rdDeviceScanAuthoritative && rdStagingReachable && Boolean(row);
+    const operations = item.querySelector<HTMLElement>("[data-rd-device-operations]");
+    const selector = item.dataset.selector ?? "";
+    const rowConnectionKnown = deviceRowConnectionKnown(row, selector);
+    const actionAvailable = rdStagingReachable && Boolean(row);
     const sourceConnected = deviceRowConnected(row);
+    const mappingAvailable = sourceConnected && rdStagingReachable &&
+      row?.aria_current === "true";
     item.dataset.scanAuthoritative = rdDeviceScanAuthoritative ? "true" : "false";
+    item.dataset.connectionKnown = rowConnectionKnown ? "true" : "false";
     item.dataset.stagingReachable = rdStagingReachable ? "true" : "false";
     item.dataset.staged = actionAvailable
       ? (row!.aria_current === "true" ? "true" : "false")
       : "unknown";
-    if (item.classList.contains("rd-keyboard-device-node")) {
-      item.dataset.sourceEnabled = sourceConnected ? "true" : "unknown";
-      item.dataset.mappingAvailable = sourceConnected && rdStagingReachable &&
-          row!.aria_current === "true"
-        ? "true"
-        : "false";
-    }
+    item.dataset.sourceEnabled = sourceConnected ? "true" : "unknown";
+    item.dataset.mappingAvailable = mappingAvailable ? "true" : "false";
+    item.dataset.sourceState = sourceConnected ? "enabled" : "unknown";
     if (stageButton) {
       const alreadyStaged = row?.aria_current === "true";
       const offlineRemove = row?.role === "offline-source";
@@ -4332,9 +5147,29 @@ function syncBenchCards(): void {
     }
 
     const encoderSurface = encoderWorkbenchSurfaces.get(item);
-    encoderSurface?.setConnectionConfirmed(rdDeviceScanAuthoritative && Boolean(row));
+    encoderSurface?.setConnectionConfirmed(sourceConnected);
 
-    if (!rdDeviceScanAuthoritative) {
+    if (!rowConnectionKnown) {
+      const policyButton = operations?.querySelector<HTMLButtonElement>(
+        '[data-nx="rd-shared-policy"]',
+      );
+      if (policyButton) {
+        // Input policy belongs to the staging graph, not hardware discovery.
+        // A refused scan pauses exact-device mapping/capture but must not make
+        // an otherwise reachable draft impossible to Save or Play.
+        const productDisabled = !rdStagingReachable;
+        policyButton.dataset.rdProductDisabled = String(productDisabled);
+        policyButton.disabled = productDisabled || rdRoot?.dataset.rdMutationPending === "true";
+        policyButton.title = policyButton.disabled
+          ? "The mapping draft is unavailable. Reconnect it before changing Play behavior."
+          : "Change the one policy shared by every routed input.";
+      }
+      if (operations) {
+        syncUnavailableDeviceCapturePanel(
+          operations,
+          item.dataset.widgetName ?? "this exact device",
+        );
+      }
       if (meta) meta.textContent = `Status unavailable — ${rdDevScanLine()}`;
       if (status) {
         status.textContent = "Device status unavailable — latest scan did not answer";
@@ -4349,14 +5184,19 @@ function syncBenchCards(): void {
         syncDeviceCardStateBadges(item, {
           role: "keyboard",
           aria_current: "false",
-        } as RdDeviceRowView);
+        } as RdDeviceRowView, false);
       } else {
-        syncDeviceCardStateBadges(item, { aria_current: "true" } as RdDeviceRowView);
+        syncDeviceCardStateBadges(
+          item,
+          { aria_current: "true" } as RdDeviceRowView,
+          false,
+        );
       }
       continue;
     }
     if (!row) continue;
     encoderSurface?.updateDevice(encoderDeviceFromRow(row));
+    if (operations) syncDeviceOperationStrip(operations, row);
 
     if (!rdStagingReachable) {
       if (status) {
@@ -4388,6 +5228,11 @@ function syncBenchCards(): void {
       "aria-label",
       `Move ${displayName}`,
     );
+    const controlsLauncher = deviceControlsLauncher(item);
+    if (controlsLauncher) {
+      controlsLauncher.setAttribute("aria-label", `Open ${displayName} controls`);
+      controlsLauncher.title = `Zoom in and open ${displayName}'s controls`;
+    }
     for (const [fieldName, value] of [
       ["selector", row.selector],
       ["alias", row.alias],
@@ -4405,6 +5250,7 @@ function syncBenchCards(): void {
     marker?.setAttribute("aria-label", `Focus ${displayName}`);
     if (marker) marker.title = displayName;
   }
+  syncProfilePolicyFallback();
   syncKeyboardDevicePresentation();
 }
 
@@ -4514,6 +5360,10 @@ function setDevModal(open: boolean, transition: AddPanelTransition = {}): void {
     return;
   }
   if (open) {
+    // Profile and Add are peer task surfaces. Retire the disclosure before
+    // mounting this higher tray so its actions never remain tabbable behind
+    // the catalog.
+    closeProfileDisclosure(false);
     // Capture the initiating control BEFORE a peer closes. Its close path
     // otherwise focuses the stale opener and makes a Devices → Controllers
     // switch return to the wrong button.
@@ -4560,6 +5410,7 @@ function setCtrlModal(open: boolean, transition: AddPanelTransition = {}): void 
   const el = ctrlModalEl();
   if (!el || el.hidden === !open) return;
   if (open) {
+    closeProfileDisclosure(false);
     const returnFocus = activeControl();
     if (devModalIsOpen()) setDevModal(false, { switching: true, restoreFocus: false });
     // Identify owns the device tray until it answers or is cancelled. Its
@@ -4648,12 +5499,14 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       onCommit: () => {
         persistCanvas();
         scheduleChips();
+        scheduleSharedPolicyEditorPosition();
       },
       // The trail behind onCommit: pans and in-flight drags reach the store
       // within a second even if the tab dies before a durable boundary.
       onChange: () => {
         scheduleCanvasPersist();
         scheduleChips();
+        scheduleSharedPolicyEditorPosition();
       },
       // The engine has no live region of its own; the meta bar's sr status
       // line is this page's.
@@ -4667,8 +5520,14 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       // pans and ctrl/cmd+wheel (= pinch) zooms at the pointer.
       navigationModel: "design-tool",
       zoomRange: { min: 0.08, max: 3 },
+      // The persistent zoom/tier strip owns the bottom edge above the canvas.
+      // Keep active-widget move chrome in the remaining hit-testable area.
+      commandViewportInsets: { bottom: 64 },
       onToolModeChange: syncToolRail,
-      onZoomChange: (zoom, tier) => applyZoomTier(tier, zoom),
+      onZoomChange: (zoom, tier) => {
+        applyZoomTier(tier, zoom);
+        scheduleSharedPolicyEditorPosition();
+      },
       onCameraHistoryChange: syncBackView,
       onSelectionChange: syncInspectorToSelection,
       onActiveItemStateChange: () => {
@@ -4677,62 +5536,37 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
         const zoom = canvasZoomFromViewport(viewport);
         syncEncoderEditingAccess(tier, zoom);
         syncKeyboardEditingAccess(tier, zoom);
+        scheduleSharedPolicyEditorPosition();
       },
       // Native controls inside client-authored widgets are not Forma runtime
       // components. Enter on the move handle / Ctrl+Enter on the item still
       // needs a deterministic way into them.
       onOpenActiveControls: (item) => {
-        const isEncoder = item.classList.contains("rd-encoder-device-node");
-        const isKeyboard = item.classList.contains("rd-keyboard-device-node") &&
-          item.dataset.sourceEnabled === "true";
-        if (isEncoder) {
-          const state = nCanvas?.getItemState(item);
-          const manualScale = state?.manualScale ?? 1;
-          const zoom = canvasZoomFromViewport(viewport);
-          const requiredZoom = encoderEditingZoom(manualScale);
-          if (viewport.dataset.canvasZoomTier !== "editing" ||
-              zoom * manualScale < ENCODER_MIN_EFFECTIVE_EDIT_SCALE) {
-            nCanvas?.setZoomTo(requiredZoom, "before opening encoder controls");
-            // The camera render is scheduled. Release this exact product host
-            // now so the synchronous F2 contract can focus its roving entry;
-            // the render callback will restamp the authoritative tier.
-            syncEncoderEditingAccess("editing", requiredZoom);
-          }
-        }
-        if (isKeyboard) {
-          const state = nCanvas?.getItemState(item);
-          const manualScale = state?.manualScale ?? 1;
-          const zoom = canvasZoomFromViewport(viewport);
-          const requiredZoom = keyboardEditingZoom(manualScale);
-          if (viewport.dataset.canvasZoomTier !== "editing" ||
-              zoom * manualScale < keyboardMinEffectiveEditScale()) {
-            nCanvas?.setZoomTo(requiredZoom, "before opening keyboard controls");
-            syncKeyboardEditingAccess("editing", requiredZoom);
-          }
+        if (item.matches(
+          ".rd-encoder-device-node, .rd-keyboard-device-node, .rd-offline-device-node",
+        )) {
+          return openDeviceBoardControls(item, true, false);
         }
         const runtime = item.querySelector<HTMLElement>("[data-forma-runtime-host]");
-        const control = isEncoder
-          ? runtime?.querySelector<HTMLElement>('[data-terminal-id][tabindex="0"]') ??
-            runtime?.querySelector<HTMLElement>(
-              "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href]",
-            )
-          : runtime?.querySelector<HTMLElement>(
-            "select:not(:disabled), input:not(:disabled), textarea:not(:disabled), button:not(:disabled), a[href]",
-          );
+        const control = runtime?.querySelector<HTMLElement>(
+          "select:not(:disabled), input:not(:disabled), textarea:not(:disabled), button:not(:disabled), a[href]",
+        );
         if (!control) return false;
         // Semantic overview intentionally hides editing chrome. F2 is an
         // explicit request to enter it, so cross the editing threshold before
         // focusing rather than claiming success on a display:none control.
-        if (!isEncoder && !isKeyboard && control.getClientRects().length === 0) {
+        if (control.getClientRects().length === 0) {
           nCanvas?.setZoomTo(0.94, "before opening widget controls");
         }
         control.focus({ preventScroll: true });
         return document.activeElement === control;
       },
-      // Focus opens the inspector (design handoff §3) and hides the chips.
-      onFocusModeChange: (_item, focused) => {
+      // Controller Focus opens its deep mapping Inspector. Physical-input
+      // Focus keeps the board-local policy/capture strip unobstructed; key
+      // activation hands selection to a controller before opening mappings.
+      onFocusModeChange: (item, focused) => {
         if (focused) {
-          setInspector(true);
+          setInspector(!item.classList.contains("rd-dev-node"));
         }
         syncChips();
       },
@@ -4828,139 +5662,408 @@ function canvasOwnsKeyboardFocus(): boolean {
   return Boolean(canvas && active instanceof Element && canvas.contains(active));
 }
 
-function setupDetails(): HTMLDetailsElement | null {
-  return rdRoot?.querySelector<HTMLDetailsElement>(".rd-setupd") ?? null;
+function profileSummary(): HTMLElement | null {
+  return rdRoot?.querySelector<HTMLElement>(".rd-profile-sum") ?? null;
 }
 
-function closeSetupForWorkbenchAction(): void {
-  const setup = setupDetails();
-  if (setup) setup.open = false;
+function renderedFocusTarget(target: HTMLElement | null): target is HTMLElement {
+  if (!target?.isConnected || target.closest("[hidden], [inert]")) return false;
+  const style = window.getComputedStyle(target);
+  return target.getClientRects().length > 0 && style.display !== "none" &&
+    style.visibility !== "hidden";
+}
+
+function focusableClickTarget(target: HTMLElement | null): HTMLElement | null {
+  const candidate = target?.closest<HTMLElement>(
+    'a[href], button, input, select, textarea, summary, [contenteditable="true"], [tabindex]',
+  ) ?? null;
+  if (!candidate || candidate.matches(':disabled, [tabindex="-1"]')) return null;
+  return renderedFocusTarget(candidate) ? candidate : null;
+}
+
+function recoveryReturnTarget(): HTMLElement | null {
+  const review = rdRoot?.querySelector<HTMLElement>(
+    '[data-rd-attention] [data-nx="rd-review-recovery"]',
+  ) ?? null;
+  return renderedFocusTarget(review) ? review : profileSummary();
+}
+
+function resetCaptureConfirmations(scope: ParentNode | null): void {
+  for (const consent of Array.from(
+    scope?.querySelectorAll<HTMLInputElement>(
+      'form[data-rd-form^="capture-"] input[type="checkbox"][name^="confirm_"]',
+    ) ?? [],
+  )) consent.checked = false;
+}
+
+function resetProfileTransientState(profile: HTMLDetailsElement): void {
+  const startOver = profile.querySelector<HTMLDetailsElement>(".rd-start-over");
+  if (startOver) startOver.open = false;
+  const confirmation = profile.querySelector<HTMLInputElement>(
+    'input[name="confirm_discard"]',
+  );
+  if (confirmation) confirmation.checked = false;
+}
+
+function closeProfileDisclosure(restoreFocus = false): boolean {
+  const profile = rdRoot?.querySelector<HTMLDetailsElement>("[data-rd-profile-menu]") ?? null;
+  if (!profile?.open) return false;
+  profile.open = false;
+  resetProfileTransientState(profile);
+  if (restoreFocus) {
+    profile.querySelector<HTMLElement>(".rd-profile-sum")?.focus({ preventScroll: true });
+  }
+  return true;
+}
+
+export function returnSharedPolicyEditor(restoreFocus = false): void {
+  const root = rdRoot;
+  const controls = sourceControlsSurface ??
+    root?.querySelector<HTMLDetailsElement>("[data-rd-source-controls]") ?? null;
+  const host = root?.querySelector<HTMLElement>("[data-rd-global-source-controls-host]") ?? null;
+  if (!controls || !host) return;
+  const attachedOpener = controls.closest(
+    "[data-rd-device-operations], [data-rd-profile-policy-fallback]",
+  )
+    ?.querySelector<HTMLButtonElement>('[data-nx="rd-shared-policy"]') ?? null;
+  const rememberedOpener = sharedPolicyReturnOpener ?? attachedOpener;
+  const rememberedSelector = sharedPolicyReturnSelector;
+  if (sharedPolicyFocusRestoreFrame) {
+    window.cancelAnimationFrame(sharedPolicyFocusRestoreFrame);
+    sharedPolicyFocusRestoreFrame = 0;
+  }
+  controls.removeAttribute("open");
+  if (controls.parentElement !== host) host.append(controls);
+  for (const button of Array.from(
+    root?.querySelectorAll<HTMLButtonElement>('[data-nx="rd-shared-policy"]') ?? [],
+  )) button.setAttribute("aria-expanded", "false");
+  if (restoreFocus) {
+    const boardOpener = rememberedSelector
+      ? benchItemEl(rememberedSelector)?.querySelector<HTMLButtonElement>(
+        '[data-nx="rd-shared-policy"]',
+      ) ?? null
+      : null;
+    const fallbackOpener = root?.querySelector<HTMLButtonElement>(
+      '[data-rd-profile-policy-fallback]:not([hidden]) [data-nx="rd-shared-policy"]',
+    ) ?? null;
+    const target = [rememberedOpener, boardOpener, fallbackOpener]
+      .find((candidate) => renderedFocusTarget(candidate ?? null));
+    target?.focus({ preventScroll: true });
+  }
+  // A policy POST may rehome the shared surface while its authoritative
+  // refresh is still under the page lock. Preserve the original invocation
+  // only across that internal close so the handler can restore focus after
+  // endMutation; every ordinary dismissal retires it immediately.
+  if (restoreFocus || root?.dataset.rdMutationPending !== "true") {
+    sharedPolicyReturnOpener = null;
+    sharedPolicyReturnSelector = "";
+  }
+}
+
+/** Keep the board-attached policy editor inside the clipped canvas viewport.
+ * The canvas stage is transformed, so viewport space must be converted back
+ * into the invoking board's local CSS pixels before constraining the popup. */
+function positionSharedPolicyEditor(): void {
+  const root = rdRoot;
+  const controls = sourceControlsSurface as HTMLDetailsElement | null;
+  if (!root || !controls?.open) return;
+  const host = controls.closest<HTMLElement>("[data-rd-policy-editor-host]");
+  const policy = host?.closest<HTMLElement>(".rd-device-policy") ?? null;
+  const popup = controls.querySelector<HTMLElement>(".rd-boardpick-pop");
+  const viewport = root.querySelector<HTMLElement>(".forma-canvas-viewport");
+  if (!host || !policy || !popup) return;
+  if (host.closest("[data-rd-profile-policy-fallback]")) {
+    host.removeAttribute("data-policy-placement");
+    for (const property of [
+      "--rd-policy-available-width",
+      "--rd-policy-available-height",
+      "--rd-policy-shift-x",
+      "--rd-policy-shift-y",
+    ]) host.style.removeProperty(property);
+    return;
+  }
+  if (!viewport) return;
+
+  const viewportRect = viewport.getBoundingClientRect();
+  const policyRect = policy.getBoundingClientRect();
+  const localWidth = Math.max(1, policy.offsetWidth);
+  const scale = Math.max(0.01, policyRect.width / localWidth);
+  const margin = 8;
+  const availableWidth = Math.max(1, (viewportRect.width - margin * 2) / scale);
+  host.style.setProperty("--rd-policy-available-width", `${availableWidth}px`);
+  host.style.setProperty("--rd-policy-shift-x", "0px");
+  host.style.setProperty("--rd-policy-shift-y", "0px");
+  host.style.removeProperty("--rd-policy-available-height");
+  host.dataset.policyPlacement = "below";
+
+  const naturalRect = popup.getBoundingClientRect();
+  const below = Math.max(0, viewportRect.bottom - policyRect.bottom - margin);
+  const above = Math.max(0, policyRect.top - viewportRect.top - margin);
+  const opensAbove = naturalRect.height <= above
+    ? naturalRect.height > below
+    : naturalRect.height > below && above > below;
+  host.dataset.policyPlacement = opensAbove ? "above" : "below";
+  const sideHeight = opensAbove ? above : below;
+  const availableHeight = Math.max(
+    1,
+    (naturalRect.height <= sideHeight
+      ? sideHeight
+      : viewportRect.height - margin * 2) / scale,
+  );
+  host.style.setProperty("--rd-policy-available-height", `${availableHeight}px`);
+
+  const placedRect = popup.getBoundingClientRect();
+  let physicalShift = 0;
+  if (placedRect.left < viewportRect.left + margin) {
+    physicalShift = viewportRect.left + margin - placedRect.left;
+  } else if (placedRect.right > viewportRect.right - margin) {
+    physicalShift = viewportRect.right - margin - placedRect.right;
+  }
+  host.style.setProperty("--rd-policy-shift-x", `${physicalShift / scale}px`);
+  let physicalShiftY = 0;
+  if (placedRect.top < viewportRect.top + margin) {
+    physicalShiftY = viewportRect.top + margin - placedRect.top;
+  } else if (placedRect.bottom > viewportRect.bottom - margin) {
+    physicalShiftY = viewportRect.bottom - margin - placedRect.bottom;
+  }
+  host.style.setProperty("--rd-policy-shift-y", `${physicalShiftY / scale}px`);
+}
+
+function scheduleSharedPolicyEditorPosition(): void {
+  if (sharedPolicyPositionFrame) return;
+  sharedPolicyPositionFrame = window.requestAnimationFrame(() => {
+    sharedPolicyPositionFrame = 0;
+    positionSharedPolicyEditor();
+  });
+}
+
+function openSharedPolicyEditor(opener: HTMLButtonElement): void {
+  const root = rdRoot;
+  const controls = sourceControlsSurface ??
+    root?.querySelector<HTMLDetailsElement>("[data-rd-source-controls]") ?? null;
+  const scope = opener.closest(
+    "[data-rd-device-operations], [data-rd-profile-policy-fallback]",
+  );
+  const host = scope
+    ?.querySelector<HTMLElement>("[data-rd-policy-editor-host]") ?? null;
+  if (!controls || !host || opener.disabled) return;
+  // A synthetic/keyboard click has no item pointerdown to select and raise its
+  // owner. Make the exact invoking board authoritative here as well, while
+  // suppressing the selection callback's Inspector. `setActive` deliberately
+  // retargets rather than exits an existing Focus session, so opening this
+  // board-local editor never restores an old overview camera underneath it.
+  const board = scope?.matches("[data-rd-device-operations]")
+    ? scope.closest<HTMLElement>(".rd-dev-node")
+    : null;
+  if (board && nCanvas) {
+    suppressInspectorForDeviceControls = true;
+    try {
+      nCanvas.setActive(board, { raiseIfNeeded: true });
+    } finally {
+      suppressInspectorForDeviceControls = false;
+    }
+    setInspector(false);
+  }
+  returnSharedPolicyEditor();
+  sharedPolicyReturnOpener = opener;
+  sharedPolicyReturnSelector = board?.dataset.selector ?? currentAuthoringSource();
+  host.append(controls);
+  controls.hidden = false;
+  controls.inert = false;
+  controls.removeAttribute("aria-hidden");
+  controls.setAttribute("open", "");
+  opener.setAttribute("aria-expanded", "true");
+  // Stamp a valid placement in the same task that exposes the popup. Tests,
+  // assistive tooling and fast keyboard users can observe it before the next
+  // animation frame; the frame below then remeasures after paint.
+  positionSharedPolicyEditor();
+  window.requestAnimationFrame(() => {
+    positionSharedPolicyEditor();
+    const chosen = controls.querySelector<HTMLButtonElement>(
+      'form button[role="radio"][aria-checked="true"]',
+    );
+    (chosen ?? controls.querySelector<HTMLButtonElement>("form button"))
+      ?.focus({ preventScroll: true });
+  });
+}
+
+/** Promote one exact board from overview into a truthful editing frame. This
+ * is intentionally not Focus mode: the rest of the workbench remains visible
+ * and the Inspector yields its inset to the board-local controls. */
+function openDeviceBoardControls(
+  item: HTMLElement,
+  preferSurface = false,
+  announce = true,
+): boolean {
+  const canvas = nCanvas;
+  const root = rdRoot;
+  if (!canvas || !root || !item.isConnected) return false;
+  const isEncoder = item.classList.contains("rd-encoder-device-node");
+  const isKeyboard = item.classList.contains("rd-keyboard-device-node");
+  const isOffline = item.classList.contains("rd-offline-device-node");
+  if (!isEncoder && !isKeyboard && !isOffline) return false;
+
+  canvas.exitFocusMode();
+  setInspector(false);
+  const manualScale = canvas.getItemState(item).manualScale;
+  const renderedScale = renderedDeviceScale(item, manualScale);
+  const requiredZoom = isEncoder
+    ? encoderEditingZoom(renderedScale)
+    : keyboardEditingZoom(renderedScale);
+  suppressInspectorForDeviceControls = true;
+  try {
+    canvas.centerItem(item, { minimumZoom: requiredZoom });
+  } finally {
+    suppressInspectorForDeviceControls = false;
+  }
+  // `setActive` reports the exact source before the camera move; keep the
+  // board-local editing request authoritative over that Inspector callback.
+  setInspector(false);
+  if (isEncoder) syncEncoderEditingAccess("editing", requiredZoom);
+  else syncKeyboardEditingAccess("editing", requiredZoom);
+
+  window.requestAnimationFrame(() => {
+    const viewport = root.querySelector<HTMLElement>(".forma-canvas-viewport");
+    const zoom = canvasZoomFromViewport(viewport);
+    const tier = viewport?.dataset.canvasZoomTier ?? "editing";
+    if (isEncoder) syncEncoderEditingAccess(tier, zoom);
+    else syncKeyboardEditingAccess(tier, zoom);
+    const runtime = item.querySelector<HTMLElement>("[data-forma-runtime-host]");
+    const operations = item.querySelector<HTMLElement>("[data-rd-device-operations]");
+    const operationControl = operations?.querySelector<HTMLElement>(
+      '[data-nx="rd-shared-policy"]:not(:disabled), [data-rd-device-capture] > summary, button:not(:disabled)',
+    ) ?? null;
+    const surfaceControl = isEncoder && item.dataset.encoderEditable === "true"
+      ? runtime?.querySelector<HTMLElement>('[data-terminal-id][tabindex="0"]') ??
+        runtime?.querySelector<HTMLElement>(
+          "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href]",
+        ) ?? null
+      : isKeyboard && item.dataset.keyboardEditable === "true"
+        ? runtime?.querySelector<HTMLElement>(
+          '[data-key][tabindex="0"], select:not(:disabled), input:not(:disabled), textarea:not(:disabled), button:not(:disabled), a[href]',
+        ) ?? null
+        : null;
+    const control = preferSurface ? surfaceControl ?? operationControl : operationControl;
+    (control ?? item).focus({ preventScroll: true });
+  });
+  if (announce) rdAnnounce(`Opened controls for ${item.dataset.widgetName ?? "this input"}.`);
+  return true;
+}
+
+/** Expanding a board-local Windows-input action must not reveal its submit
+ * button beyond the clipped canvas. Pan only as far as that exact control
+ * needs; a board deliberately wider than a phone remains at an honest target
+ * scale instead of being shrunk into fake usability. */
+function frameOpenedDeviceCapture(details: HTMLDetailsElement): void {
+  const item = details.closest<HTMLElement>(".rd-dev-node");
+  const canvas = nCanvas;
+  if (!item || !canvas || !details.open) return;
+  suppressInspectorForDeviceControls = true;
+  try {
+    canvas.setActive(item);
+  } finally {
+    suppressInspectorForDeviceControls = false;
+  }
+  setInspector(false);
+  const operationTarget = details.querySelector<HTMLElement>(
+    'button[type="submit"]:not(:disabled)',
+  ) ?? details.querySelector<HTMLElement>("input:not(:disabled)");
+  operationTarget?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  if (operationTarget) canvas.revealElement(operationTarget);
 }
 
 function focusCaptureRecovery(): void {
-  const setup = setupDetails();
-  if (!setup) return;
-  setup.open = true;
+  const root = rdRoot;
+  if (!root) return;
+  const captureUnavailable = rdCaptureMode() === "unavailable";
+  const unavailableHeld = captureUnavailable ? rdCaptureHeld() : [];
+  if (captureUnavailable && unavailableHeld.length === 0) {
+    const retry = Array.from(
+      root.querySelectorAll<HTMLButtonElement>('[data-nx="rd-refresh-retry"]'),
+    ).find((button) => !button.hidden && !button.classList.contains("none"));
+    retry?.scrollIntoView({ block: "nearest" });
+    (retry ?? profileSummary())?.focus({ preventScroll: true });
+    return;
+  }
+  const primaryNeedsAttention = RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode());
+  const candidates = captureUnavailable
+    ? unavailableHeld
+    : primaryNeedsAttention ? rdCaptureHeld() : additionalHeldCaptureRows();
+  const selector = captureUnavailable
+    ? (candidates.length === 1 ? candidates[0].selector : "")
+    : primaryNeedsAttention
+    ? rdCaptureSelector() || (candidates.length === 1 ? candidates[0].selector : "")
+    : candidates.length === 1 ? candidates[0].selector : "";
+  let item = selector ? benchItemEl(selector) : null;
+  // The canvas starts empty by design. Review preparation is an explicit
+  // request to reveal an already-routed exact source, so mount that board
+  // without staging it again or authorizing an encoder chart read.
+  if (!item && selector) {
+    const row = deviceRowFor(selector);
+    if (
+      row?.aria_current === "true" &&
+      (row.role === "keyboard" || row.role === "panel-encoder")
+    ) {
+      const bench = benchSelectors();
+      if (!bench.includes(selector)) canvasPrefs.bench = [...bench, selector];
+      mountDeviceWidget(row, bench.length, false, false);
+      saveCanvasPrefs();
+      syncMapCount();
+      syncDeviceRows();
+      syncBenchCards();
+      item = benchItemEl(selector);
+    }
+  }
+  // A remembered canvas board may survive Start over even though the exact
+  // source is no longer in the draft. Its operation strip is intentionally
+  // inert in that state, so recovery must not focus the hidden/inert board
+  // action and strand the operator. Only an actively staged board can own
+  // recovery; orphaned held inputs use the exact-device sheet below.
+  const boardRow = selector ? deviceRowFor(selector) : undefined;
+  const boardCapture = !captureUnavailable && boardRow?.aria_current === "true"
+    ? item?.querySelector<HTMLDetailsElement>("[data-rd-device-capture]") ?? null
+    : null;
+  if (item && boardCapture) {
+    suppressInspectorForDeviceControls = true;
+    try {
+      nCanvas?.setSelection([item]);
+    } finally {
+      suppressInspectorForDeviceControls = false;
+    }
+    setInspector(false);
+    const manualScale = nCanvas?.getItemState(item).manualScale ?? 1;
+    const renderedScale = renderedDeviceScale(item, manualScale);
+    const isEncoder = item.classList.contains("rd-encoder-device-node");
+    const requiredZoom = isEncoder
+      ? encoderEditingZoom(renderedScale)
+      : keyboardEditingZoom(renderedScale);
+    nCanvas?.centerItem(item, { minimumZoom: requiredZoom });
+    if (isEncoder) syncEncoderEditingAccess("editing", requiredZoom);
+    else syncKeyboardEditingAccess("editing", requiredZoom);
+    boardCapture.open = true;
+    window.requestAnimationFrame(() => {
+      boardCapture.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+    });
+    return;
+  }
+  const sheet = root.querySelector<HTMLElement>("[data-rd-recovery-sheet]");
+  if (!sheet) return;
+  // Recovery is its own focused operation surface. Leaving the selection
+  // Inspector above it creates controls that are visible but cannot be
+  // clicked, especially the right-aligned consent/action column.
+  setInspector(false);
+  sheet.hidden = false;
   window.requestAnimationFrame(() => {
-    const rows = RD_CAPTURE_ATTENTION_MODES.has(rdCaptureMode())
-      ? rdCaptureHeld()
-      : additionalHeldCaptureRows();
-    const wanted = rows.length === 1 ? rows[0] : null;
+    const wanted = candidates.length === 1 ? candidates[0] : null;
     const held = wanted
-      ? Array.from(setup.querySelectorAll<HTMLElement>(".rd-held-row")).find(
+      ? Array.from(sheet.querySelectorAll<HTMLElement>(".rd-held-row")).find(
         (row) => row.dataset.heldKey === wanted.key,
       )
       : null;
-    const target = held ?? setup.querySelector<HTMLElement>("#rd-capture-readiness");
+    const target = held ?? sheet;
     target?.scrollIntoView({ block: "center" });
     target?.focus({ preventScroll: true });
   });
-}
-
-function openJourneyDevicePicker(kind: "devices" | "controllers"): void {
-  closeSetupForWorkbenchAction();
-  const opener = rdRoot?.querySelector<HTMLElement>(
-    kind === "devices" ? '[data-nx="rd-devs-open"]' : '[data-nx="rd-ctrls-open"]',
-  );
-  opener?.focus({ preventScroll: true });
-  if (kind === "devices") setDevModal(true);
-  else setCtrlModal(true);
-}
-
-function focusJourneyMapping(): void {
-  const slot = rdCtrlPanel?.slot_val || rdCtrlCards[0]?.number || "";
-  const item = slot
-    ? rdRoot?.querySelector<HTMLElement>(
-      `.forma-canvas-stage > [data-instance-id="ctrl-slot-${CSS.escape(slot)}"]`,
-    ) ?? null
-    : null;
-  if (!item || !nCanvas) {
-    openJourneyDevicePicker("controllers");
-    return;
-  }
-  closeSetupForWorkbenchAction();
-  nCanvas.setSelection([item]);
-  setInspector(true);
-  renderInspector();
-  window.requestAnimationFrame(() => {
-    const target = rdRoot?.querySelector<HTMLElement>(
-      '.rd-insp-body [data-nx="rd-automap"], .rd-insp-body details.n-bind > summary, ' +
-        '.rd-inspector [data-nx="rd-insp-close"]',
-    );
-    target?.focus({ preventScroll: true });
-  });
-}
-
-function focusJourneyPlay(): void {
-  const formKind = rdOperations?.session?.running === true ? "stop" : "play";
-  const action = Array.from(
-    rdRoot?.querySelectorAll<HTMLButtonElement>(
-      `[data-rd-form="${formKind}"] button[type="submit"]:not([disabled])`,
-    ) ?? [],
-  ).find((button) => button.offsetParent !== null);
-  if (action) {
-    closeSetupForWorkbenchAction();
-    action.focus({ preventScroll: true });
-    return;
-  }
-  const setup = setupDetails();
-  if (setup) setup.open = true;
-  const reason = rdRoot?.querySelector<HTMLElement>("#rd-play-reason");
-  reason?.scrollIntoView({ block: "center" });
-  reason?.focus({ preventScroll: true });
-}
-
-async function retryJourney(button: HTMLButtonElement | null): Promise<void> {
-  if (rdRoot?.dataset.rdMutationPending === "true" || button?.dataset.rdRetryPending === "true") {
-    return;
-  }
-  const journeyStep = button?.dataset.journeyStep ?? "";
-  const badge = button?.querySelector<HTMLElement>(".rd-journey-badge") ?? null;
-  const settled = badge?.textContent ?? "Retry";
-  if (button) {
-    button.dataset.rdRetryPending = "true";
-    button.setAttribute("aria-busy", "true");
-    button.disabled = true;
-  }
-  if (badge) badge.textContent = "Checking…";
-  rdAnnounce("Checking workbench status…");
-  try {
-    await redesignRefreshFn();
-  } finally {
-    if (button) {
-      delete button.dataset.rdRetryPending;
-      button.removeAttribute("aria-busy");
-      button.disabled = false;
-      if (badge?.isConnected) badge.textContent = settled;
-    }
-    // A successful retry can change this row's badge/detail, which gives the
-    // keyed list a new identity and disconnects the initiating button. Keep
-    // focus on the same setup step after that authoritative repaint; if the
-    // step disappeared, the always-present Setup summary is the stable home.
-    const replacement = button?.isConnected
-      ? button
-      : journeyStep
-        ? rdRoot?.querySelector<HTMLButtonElement>(
-            `[data-journey-step="${CSS.escape(journeyStep)}"]`,
-          ) ?? null
-        : null;
-    (replacement ?? rdRoot?.querySelector<HTMLElement>(".rd-setup-sum"))
-      ?.focus({ preventScroll: true });
-  }
-}
-
-function runJourneyAction(action: string, button: HTMLButtonElement | null): void {
-  if (action === "devices" || action === "controllers") {
-    openJourneyDevicePicker(action);
-  } else if (action === "capture") {
-    focusCaptureRecovery();
-  } else if (action === "mapping") {
-    focusJourneyMapping();
-  } else if (action === "play") {
-    focusJourneyPlay();
-  } else if (action === "retry") {
-    void retryJourney(button);
-  }
 }
 
 export function redesignWire(root: HTMLElement): void {
@@ -4970,16 +6073,110 @@ export function redesignWire(root: HTMLElement): void {
     KEYBOARD_SURFACE_TEMPLATE_BODY_SELECTOR,
   );
   sourceControlsSurface = root.querySelector<HTMLElement>("[data-rd-source-controls]");
+  // The policy editor lives inside a canvas item while it is open. Handle its
+  // Escape one rung below the generic canvas keyboard proxy: the canvas quite
+  // correctly returns Escape from ordinary nested controls to the widget, but
+  // this disclosure owns the key first and must close back to its exact opener.
+  sourceControlsSurface?.addEventListener("keydown", (event) => {
+    if (!sourceControlsSurface?.hasAttribute("open")) return;
+    const radio = event.target instanceof Element
+      ? event.target.closest<HTMLButtonElement>('[role="radio"]')
+      : null;
+    if (radio && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]
+      .includes(event.key)) {
+      const group = radio.closest<HTMLElement>('[role="radiogroup"]');
+      const radios = Array.from(
+        group?.querySelectorAll<HTMLButtonElement>('[role="radio"]:not(:disabled)') ?? [],
+      );
+      const index = radios.indexOf(radio);
+      if (index >= 0 && radios.length > 0) {
+        const next = event.key === "Home"
+          ? radios[0]
+          : event.key === "End"
+          ? radios[radios.length - 1]
+          : radios[
+            (index + (["ArrowLeft", "ArrowUp"].includes(event.key) ? -1 : 1) + radios.length) %
+            radios.length
+          ];
+        event.preventDefault();
+        event.stopPropagation();
+        next.focus({ preventScroll: true });
+        // Like native radios, an arrow both moves and commits the checked
+        // choice. These options are guarded POST actions, so activation keeps
+        // the same authority and pending lifecycle as a pointer selection.
+        next.click();
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      returnSharedPolicyEditor(true);
+    }
+  });
+  sourceControlsSurface?.addEventListener("wheel", (event) => {
+    if (!sourceControlsSurface?.hasAttribute("open")) return;
+    // The popup owns ordinary wheel scrolling. Pinch/Ctrl-wheel over it must
+    // not mutate the canvas camera behind the choices.
+    event.stopPropagation();
+    if (event.ctrlKey || event.metaKey) event.preventDefault();
+  }, { passive: false });
   wireThemeDisclosures(root);
   wireRedesignToolsDisclosures(root);
   // The wire's own "JavaScript is live" marker: scripting-only chrome (the
   // camera buttons) reveals off it, and the parity gate normalizes it.
   root.classList.add("js");
+  const wiredPolicySurface = sourceControlsSurface;
+  // `applyRedesign(seed)` runs before the island tree is adopted and keeps
+  // all three native policy POSTs at tabindex=0 to match SSR. Defer the
+  // one-stop enhancement until the hydration call stack has returned, so
+  // adoption sees byte-for-byte matching attributes rather than repairing a
+  // mismatch as it mounts.
+  queueMicrotask(() => {
+    if (rdRoot !== root || sourceControlsSurface !== wiredPolicySurface || !root.isConnected) {
+      return;
+    }
+    applySharedPolicyRows(rdCaptureChoiceRows, true);
+  });
   syncAddPanelChrome();
   // The migration-compatible finish stores preserve every DS4 color or
   // premium finish chosen before the hard cutover.
   loadDs4Variants();
   loadControllerFinishes();
+  root.addEventListener(
+    "toggle",
+    (event) => {
+      const details = event.target;
+      if (!(details instanceof HTMLDetailsElement)) return;
+      if (details.matches("[data-rd-profile-menu]") && details.open) {
+        if (devModalIsOpen()) setDevModal(false, { restoreFocus: false });
+        if (ctrlModalIsOpen()) setCtrlModal(false, { restoreFocus: false });
+        // Identify owns its tray until the listen settles or is cancelled.
+        // If that guarded close refused, keep Profile closed rather than
+        // stacking two independently focusable task surfaces.
+        if (devModalIsOpen() || ctrlModalIsOpen()) {
+          details.open = false;
+          resetProfileTransientState(details);
+        }
+        return;
+      }
+      if (details.open) {
+        if (details.matches("[data-rd-device-capture]")) {
+          window.requestAnimationFrame(() => frameOpenedDeviceCapture(details));
+        }
+        return;
+      }
+      if (details.matches("[data-rd-source-controls]") &&
+          details.closest("[data-rd-policy-editor-host]")) {
+        returnSharedPolicyEditor();
+      } else if (details.matches("[data-rd-profile-menu]")) {
+        resetProfileTransientState(details);
+      } else if (details.matches("[data-rd-device-capture]")) {
+        resetCaptureConfirmations(details);
+      }
+    },
+    true,
+  );
   // The Paths scope select (a change, not a click).
   root.addEventListener("change", (ev) => {
     // A macro duration or auto-fire rate commits when the author leaves the
@@ -5012,6 +6209,16 @@ export function redesignWire(root: HTMLElement): void {
     if (themeMenu && !target?.closest("[data-rd-theme-menu]")) {
       closeThemeMenu();
     }
+    const profileMenu = rdRoot?.querySelector<HTMLDetailsElement>("[data-rd-profile-menu][open]");
+    if (profileMenu && !target?.closest("[data-rd-profile-menu]")) {
+      // A pointer click on non-focusable chrome does not move focus first.
+      // Return that now-hidden menu focus to its durable summary; a click on
+      // another real control has already moved focus and must keep it there.
+      const outsideFocusTarget = focusableClickTarget(target);
+      closeProfileDisclosure(
+        profileMenu.contains(document.activeElement) || outsideFocusTarget === null,
+      );
+    }
     const toolsMenu = rdRoot?.querySelector<HTMLElement>("[data-rd-tools-menu][open]");
     if (toolsMenu && !target?.closest("[data-rd-tools-menu]")) {
       closeRedesignToolsDisclosure(root);
@@ -5025,28 +6232,62 @@ export function redesignWire(root: HTMLElement): void {
     const toolsCanvasAction = target?.closest("[data-rd-tools-menu]") &&
       (hit === "rd-back" || hit === "rd-search" || hit === "rd-keys");
     if (toolsCanvasAction) {
-      const fromCompactTools = Boolean(target?.closest(".rd-utility-compact-home"));
-      closeRedesignToolsDisclosure(root, !fromCompactTools);
-      if (fromCompactTools) {
-        const setup = root.querySelector<HTMLDetailsElement>(".rd-setupd");
-        setup?.removeAttribute("open");
-        setup?.querySelector<HTMLElement>(":scope > .rd-setup-sum")
-          ?.focus({ preventScroll: true });
-      }
+      closeRedesignToolsDisclosure(root, true);
     }
     // The board and While-playing pickers keep the same convention: a
     // click outside a popover puts it away (each one for itself, so
     // opening one closes the other).
+    const sharedPolicyOpener = hit === "rd-shared-policy"
+      ? target?.closest<HTMLButtonElement>('[data-nx="rd-shared-policy"]') ?? null
+      : null;
+    const togglesSharedPolicyClosed = Boolean(
+      sharedPolicyOpener && sourceControlsSurface?.hasAttribute("open") &&
+        sourceControlsSurface.closest("[data-rd-device-operations]") ===
+          sharedPolicyOpener.closest("[data-rd-device-operations]"),
+    );
     for (const pick of Array.from(
       rdRoot?.querySelectorAll<HTMLElement>(".rd-boardpick[open]") ?? [],
     )) {
-      if (target && !pick.contains(target)) pick.removeAttribute("open");
+      if (target && !pick.contains(target)) {
+        const sharedPolicy = pick.matches("[data-rd-source-controls]");
+        if (sharedPolicy && togglesSharedPolicyClosed) continue;
+        pick.removeAttribute("open");
+        if (sharedPolicy) returnSharedPolicyEditor();
+      }
     }
     // THE MACRO EDITOR's own controls (cells, motions, policies, acts) —
     // checked before the [data-nx] switch because they live inside the
     // dialog's dlg-noop shield and carry data-mac* instead.
     if (rdMacClick(target)) {
       ev.preventDefault();
+      return;
+    }
+    if (hit === "rd-open-device-controls") {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const item = target?.closest<HTMLElement>(".rd-dev-node");
+      if (item) openDeviceBoardControls(item);
+      return;
+    }
+    if (hit === "rd-shared-policy") {
+      ev.preventDefault();
+      if (togglesSharedPolicyClosed) returnSharedPolicyEditor(true);
+      else if (sharedPolicyOpener) openSharedPolicyEditor(sharedPolicyOpener);
+      return;
+    }
+    if (hit === "rd-shared-policy-close") {
+      ev.preventDefault();
+      returnSharedPolicyEditor(true);
+      return;
+    }
+    if (hit === "rd-recovery-close") {
+      ev.preventDefault();
+      const sheet = target?.closest<HTMLElement>("[data-rd-recovery-sheet]");
+      if (sheet) {
+        resetCaptureConfirmations(sheet);
+        sheet.hidden = true;
+      }
+      recoveryReturnTarget()?.focus({ preventScroll: true });
       return;
     }
     // Edit steps… (and any same-page ?macro= door): enhanced into a URL
@@ -5077,9 +6318,14 @@ export function redesignWire(root: HTMLElement): void {
       ev.preventDefault();
       const item = unavailableKeyboardKey.closest<HTMLElement>(".rd-keyboard-device-node");
       const name = item?.dataset.widgetName?.trim() || "This keyboard";
-      rdAnnounce(
-        `${name} is on the canvas but not in the mapping draft. Add it before editing its keys.`,
-      );
+      const message = !rdStagingReachable
+        ? `${name} mapping controls are paused because the draft service did not answer. Studio reconnects automatically.`
+        : item?.dataset.sourceEnabled !== "true"
+          ? `${name} mapping controls are paused until KSX confirms this exact connection.`
+          : item?.dataset.staged !== "true"
+            ? `${name} is on the canvas but not in the mapping draft. Add it before editing its keys.`
+            : `${name} mapping controls are temporarily unavailable.`;
+      rdAnnounce(message);
       return;
     }
     // Plate cell → Keys row: the board is the Keys tab's own picture, so
@@ -5205,12 +6451,6 @@ export function redesignWire(root: HTMLElement): void {
     }
     if (hit === "rd-conf-force") {
       conflictForce();
-      return;
-    }
-    if (hit === "rd-journey-action") {
-      ev.preventDefault();
-      const button = target?.closest<HTMLButtonElement>('[data-nx="rd-journey-action"]') ?? null;
-      runJourneyAction(button?.dataset.journeyAction ?? "", button);
       return;
     }
     if (hit === "rd-review-recovery") {
@@ -5526,9 +6766,18 @@ export function redesignWire(root: HTMLElement): void {
   window.addEventListener("resize", () => {
     nCanvas?.setSafeInsetRight(inspectorInset(), true);
     scheduleChips();
+    scheduleSharedPolicyEditorPosition();
   });
 
   window.addEventListener("keydown", (ev) => {
+    const policySurface = sourceControlsSurface;
+    const policyOwnsFocus = policySurface?.hasAttribute("open") === true &&
+      ((document.activeElement instanceof Element && policySurface.contains(document.activeElement)) ||
+        sharedPolicyFocusRestoreFrame !== 0);
+    // A board-local dialog owns every non-Escape keystroke while one of its
+    // choices is focused. Canvas single-key shortcuts and the global palette
+    // must not move or cover the surface underneath it.
+    if (policyOwnsFocus && ev.key !== "Escape") return;
     // Ctrl/Cmd+K / F open the palette from ANYWHERE, a text field included —
     // the one binding checked before the typing guard. NOT while a mapping
     // gesture holds the page: a key in hand or an armed learn owns the
@@ -5572,10 +6821,28 @@ export function redesignWire(root: HTMLElement): void {
         rdMacClose();
         return;
       }
-      // The escape ladder (design handoff §2), one rung per press: theme
-      // menu → device picker → sheet → palette → camera menu → focus mode →
-      // back view → clear selection. A closed disclosure returns focus to
-      // its trigger instead of letting the same key reach the canvas below.
+      // The escape ladder (design handoff §2), one rung per press. New
+      // profile/device layers retire before the older canvas chrome, and a
+      // closed disclosure returns focus instead of leaking the same key to
+      // camera history or selection below it.
+      const policyOpen = sourceControlsSurface?.hasAttribute("open") === true;
+      if (policyOpen) {
+        returnSharedPolicyEditor(true);
+        ev.preventDefault();
+        return;
+      }
+      if (closeProfileDisclosure(true)) {
+        ev.preventDefault();
+        return;
+      }
+      const recovery = root.querySelector<HTMLElement>("[data-rd-recovery-sheet]:not([hidden])");
+      if (recovery) {
+        resetCaptureConfirmations(recovery);
+        recovery.hidden = true;
+        recoveryReturnTarget()?.focus({ preventScroll: true });
+        ev.preventDefault();
+        return;
+      }
       if (closeThemeMenu(true)) {
         ev.preventDefault();
         return;
@@ -5724,13 +6991,13 @@ function redesignThemeDisclosure() {
   );
 }
 
-/** Session-wide input policy belongs to the canvas chrome, not to any one
- * physical keyboard. Rendering it in its final host keeps first paint and
- * hydration structurally identical; no client-side DOM relocation is needed. */
+/** One session-wide input policy is parked outside the canvas for SSR parity,
+ * then moved into the exact board whose Change button invoked it. */
 function redesignSourceControls() {
   return h(
     "details",
     {
+      id: "rd-shared-policy-editor",
       class: "rd-boardpick rd-capture",
       "data-rd-source-controls": "",
     },
@@ -5741,34 +7008,416 @@ function redesignSourceControls() {
     ),
     h(
       "div",
-      { class: "rd-boardpick-pop" },
+      {
+        class: "rd-boardpick-pop",
+        role: "dialog",
+        "aria-labelledby": "rd-policy-editor-title",
+      },
+      h(
+        "div",
+        { class: "rd-policy-editor-head" },
+        h(
+          "div",
+          null,
+          h("strong", { id: "rd-policy-editor-title" }, "All mapped inputs"),
+          h("span", null, "One Play-session policy; every routed keyboard or encoder follows it."),
+        ),
+        h(
+          "button",
+          {
+            type: "button",
+            class: "rd-policy-editor-close",
+            "data-nx": "rd-shared-policy-close",
+            "aria-label": "Close input behavior choices",
+          },
+          "×",
+        ),
+      ),
       h("p", { class: "n-devnote" }, () => rdCaptureNote()),
-      createList(
-        () => rdCaptureRows(),
-        (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
-        (r) =>
-          h(
-            "form",
-            {
-              class: "n-modeform",
-              method: "post",
-              action: "/redesign/blocking",
-              "data-rd-form": "blocking",
-            },
-            h("input", { type: "hidden", name: "blocking", value: r.name }),
+      h(
+        "div",
+        {
+          class: "rd-policy-options",
+          role: "radiogroup",
+          "aria-label": "Input behavior while playing",
+          "data-client-roving-policy": "",
+        },
+        createList(
+          () => rdCaptureRows(),
+          (r) =>
+            r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen +
+            "|" + r.tabindex,
+          (r) =>
             h(
-              "button",
-              { type: "submit", class: r.cls, "aria-current": r.chosen },
-              h("span", { class: "n-radio-dot" }),
+              "form",
+              {
+                class: "n-modeform",
+                method: "post",
+                action: "/redesign/blocking",
+                "data-rd-form": "blocking",
+              },
+              h("input", { type: "hidden", name: "blocking", value: r.name }),
               h(
-                "span",
-                { class: "n-radio-txt" },
-                h("span", { class: "n-radio-title" }, r.title),
-                h("span", { class: "n-radio-detail" }, r.detail),
+                "button",
+                {
+                  type: "submit",
+                  role: "radio",
+                  class: r.cls,
+                  "aria-checked": r.chosen,
+                  tabindex: r.tabindex,
+                },
+                h("span", { class: "n-radio-dot" }),
+                h(
+                  "span",
+                  { class: "n-radio-txt" },
+                  h("span", { class: "n-radio-title" }, r.title),
+                  h("span", { class: "n-radio-detail" }, r.detail),
+                ),
               ),
             ),
-          ),
+        ),
       ),
+    ),
+  );
+}
+
+/** Draft persistence is a small file/profile concern, not a setup wizard.
+ * Save remains a direct lifecycle verb; this disclosure owns only the two
+ * less-frequent draft transitions. */
+function redesignProfileDisclosure() {
+  return h(
+    "details",
+    { class: "rd-profiled", "data-rd-profile-menu": "" },
+    h(
+      "summary",
+      {
+        class: "rd-profile-sum",
+        title: "Open profile and draft actions",
+      },
+      h("span", { class: "rd-profile-icon", "aria-hidden": "true" }, "◇"),
+      h("span", { class: "rd-profile-word" }, "Profile"),
+      h("span", { class: "rd-profile-state" }, () => rdOpDraftLabel()),
+      h(
+        "span",
+        {
+          class: "rd-profile-session",
+          "data-state": () => rdOpSessionBadgeState(),
+        },
+        () => rdOpSessionBadge(),
+      ),
+      h("span", { class: "rd-caret", "aria-hidden": "true" }, "⌄"),
+    ),
+    h(
+      "div",
+      { class: "rd-profile-menu" },
+      h(
+        "div",
+        { class: "rd-profile-head" },
+        h(
+          "div",
+          null,
+          h("span", { class: "n-kick" }, "Current profile"),
+          h("strong", null, () => rdOpDraftLabel()),
+          h("p", null, () => rdOpDraftDetail()),
+        ),
+        h(
+          "span",
+          {
+            class: "rd-buildmeta",
+            title: "Studio build version — include this in a support report",
+            "aria-label": "Studio build version",
+          },
+          "v",
+          () => rdStudioVersion(),
+        ),
+      ),
+      h(
+        "div",
+        { class: "rd-saved-row" },
+        h("strong", null, () => rdOpSavedLabel()),
+        h("span", null, () => rdOpSavedDetail()),
+      ),
+      h(
+        "form",
+        { method: "post", action: "/redesign/adopt", "data-rd-form": "adopt" },
+        h(
+          "button",
+          {
+            type: "submit",
+            class: "rd-panel-action",
+            disabled: () => rdAdoptDisabled(),
+            "aria-describedby": "rd-adopt-reason",
+          },
+          h("span", { class: "rd-action-label" }, () => rdAdoptLabel()),
+          h("span", { class: "rd-action-pending", hidden: "" }, "Loading…"),
+        ),
+      ),
+      h("p", { id: "rd-adopt-reason", class: "rd-action-reason" }, () => rdAdoptReason()),
+      h(
+        "details",
+        { class: "rd-start-over" },
+        h("summary", null, "Start over…"),
+        h("p", { id: "rd-discard-reason", class: "rd-action-reason" }, () => rdDiscardReason()),
+        h(
+          "form",
+          { method: "post", action: "/redesign/discard", "data-rd-form": "discard" },
+          h("input", {
+            type: "hidden",
+            name: "expected_revision",
+            value: () => rdDraftRevision(),
+          }),
+          h(
+            "label",
+            { class: () => rdDiscardConfirmCls() },
+            h("input", {
+              type: "checkbox",
+              name: "confirm_discard",
+              value: "yes",
+              required: () => rdDraftDirty(),
+            }),
+            "Discard unsaved edits",
+          ),
+          h(
+            "button",
+            {
+              type: "submit",
+              class: "rd-panel-action danger",
+              disabled: () => rdDiscardDisabled(),
+              "aria-describedby": "rd-discard-reason",
+            },
+            h("span", { class: "rd-action-label" }, () => rdDiscardLabel()),
+            h("span", { class: "rd-action-pending", hidden: "" }, "Clearing…"),
+          ),
+        ),
+      ),
+      h(
+        "section",
+        {
+          class: "rd-profile-policy-fallback rd-device-policy",
+          "data-rd-profile-policy-fallback": "",
+          // Visibility and copy depend on browser-owned canvas membership:
+          // SSR cannot know whether an exact board will mount after adoption.
+          "data-client-policy-fallback": "",
+          hidden: "",
+          inert: "",
+          "aria-hidden": "true",
+        },
+        h("span", { class: "rd-device-policy-label" }, "During Play · mapped inputs"),
+        h("strong", { "data-rd-policy-current": "" }, "Choose before Play"),
+        h(
+          "span",
+          { "data-rd-policy-effect": "" },
+          "Choose how routed input reaches ksx and Windows.",
+        ),
+        h(
+          "button",
+          {
+            type: "button",
+            class: "rd-policy-change",
+            "data-nx": "rd-shared-policy",
+            "aria-haspopup": "dialog",
+            "aria-controls": "rd-shared-policy-editor",
+            "aria-expanded": "false",
+          },
+          "Change for all",
+        ),
+        h(
+          "div",
+          {
+            class: "rd-policy-editor-host",
+            "data-rd-policy-editor-host": "",
+          },
+        ),
+      ),
+      h("p", { class: "rd-profile-session-line" }, () => rdOpSessionLine()),
+      h("p", { class: "rd-profile-escape-line" }, () => rdOpEscapeLine()),
+    ),
+  );
+}
+
+function nativePrepareConsents() {
+  return h(
+    "div",
+    { class: "rd-capture-consents" },
+    h(
+      "label",
+      { class: "rd-consent" },
+      h("input", {
+        type: "checkbox",
+        name: "confirm_spare_keyboard",
+        value: "yes",
+        required: "",
+      }),
+      h("span", null, "I connected and tested a different keyboard that can still type."),
+    ),
+    h(
+      "label",
+      { class: "rd-consent" },
+      h("input", {
+        type: "checkbox",
+        name: "confirm_rebind",
+        value: "yes",
+        required: "",
+      }),
+      h("span", null, "I understand this exact input stops ordinary typing until I release it here."),
+    ),
+    h(
+      "label",
+      { class: "rd-consent" },
+      h("input", {
+        type: "checkbox",
+        name: "confirm_machine_certificate",
+        value: "yes",
+        required: "",
+      }),
+      h("span", null, "I allow ksx to install its machine-local signing certificate for this generated driver package."),
+    ),
+  );
+}
+
+/** The no-script escape stays exact and fully actionable. The scripted
+ * workbench hides this copy and puts the same forms on their physical boards. */
+function redesignNativeCaptureFallback() {
+  return h(
+    "section",
+    { class: "rd-capture-native", "aria-labelledby": "rd-capture-native-head" },
+    h("h2", { id: "rd-capture-native-head" }, () => rdCaptureHeading()),
+    h("p", { class: "rd-card-lede" }, () => rdCaptureLine()),
+    h("p", { class: "rd-capture-recovery-line" }, () => rdCaptureRecoveryLine()),
+    h(
+      "form",
+      {
+        class: () => rdCapturePrepareCls(),
+        method: "post",
+        action: "/redesign/capture/prepare",
+        "data-rd-form": "capture-prepare",
+      },
+      h("input", { type: "hidden", name: "expected_selector", value: () => rdCaptureSelector() }),
+      h("input", { type: "hidden", name: "instance_id", value: () => rdCaptureInstance() }),
+      nativePrepareConsents(),
+      h(
+        "button",
+        { type: "submit", class: "rd-panel-action primary", "data-rd-product-disabled": "false" },
+        h("span", { class: "rd-action-label" }, "Prepare this input"),
+        h("span", { class: "rd-action-pending", hidden: "" }, "Preparing…"),
+      ),
+    ),
+    createList(
+      () => rdCaptureHeld(),
+      heldCaptureRenderKey,
+      (row) =>
+        h(
+          "article",
+          { class: "rd-held-row", "data-held-key": row.key },
+          h("div", null, h("strong", null, row.name), h("span", null, row.summary), h("span", { class: "rd-held-note" }, row.note)),
+          h(
+            "form",
+            { method: "post", action: "/redesign/capture/release", "data-rd-form": "capture-release" },
+            h("input", { type: "hidden", name: "expected_selector", value: row.selector }),
+            h("input", { type: "hidden", name: "instance_id", value: row.instance }),
+            h(
+              "label",
+              { class: "rd-consent compact" },
+              h("input", {
+                type: "checkbox",
+                name: "confirm_release",
+                value: "yes",
+                required: "",
+                disabled: row.disabled,
+              }),
+              h("span", null, "Return this exact input to ordinary Windows use"),
+            ),
+            h(
+              "button",
+              { type: "submit", class: "rd-panel-action", disabled: row.disabled },
+              h("span", { class: "rd-action-label" }, "Release"),
+              h("span", { class: "rd-action-pending", hidden: "" }, "Releasing…"),
+            ),
+          ),
+        ),
+    ),
+  );
+}
+
+/** Conditional machine recovery, not onboarding. It is opened only when the
+ * persistent attention banner cannot take the user straight to one mounted
+ * board (for example, an orphaned held keyboard outside the draft). */
+function redesignCaptureRecoverySheet() {
+  return h(
+    "section",
+    {
+      class: "rd-capture-recovery-sheet",
+      "data-rd-recovery-sheet": "",
+      hidden: "",
+      tabindex: "-1",
+      "aria-labelledby": "rd-recovery-sheet-head",
+    },
+    h(
+      "div",
+      { class: "rd-recovery-sheet-head" },
+      h(
+        "div",
+        null,
+        h("span", { class: "n-kick" }, "Exact-device recovery"),
+        h("h2", { id: "rd-recovery-sheet-head" }, "Inputs held by ksx"),
+        h("p", null, "Release is resolved from the current Windows device tree. ksx never guesses between ambiguous identities."),
+      ),
+      h(
+        "button",
+        {
+          type: "button",
+          class: "rd-policy-editor-close",
+          "data-nx": "rd-recovery-close",
+          "aria-label": "Close exact-device recovery",
+        },
+        "×",
+      ),
+    ),
+    createList(
+      () => rdCaptureHeld(),
+      heldCaptureRenderKey,
+      (row) =>
+        h(
+          "article",
+          {
+            class: "rd-held-row",
+            tabindex: "-1",
+            "data-held-key": row.key,
+            "data-held-selector": row.selector,
+            "data-held-instance": row.instance,
+          },
+          h(
+            "div",
+            null,
+            h("strong", null, row.name),
+            h("span", null, row.summary),
+            h("span", { class: "rd-held-note" }, row.note),
+          ),
+          h(
+            "form",
+            { method: "post", action: "/redesign/capture/release", "data-rd-form": "capture-release" },
+            h("input", { type: "hidden", name: "expected_selector", value: row.selector }),
+            h("input", { type: "hidden", name: "instance_id", value: row.instance }),
+            h(
+              "label",
+              { class: "rd-consent compact" },
+              h("input", {
+                type: "checkbox",
+                name: "confirm_release",
+                value: "yes",
+                required: "",
+                disabled: row.disabled,
+              }),
+              h("span", null, "Return this exact input to ordinary Windows use"),
+            ),
+            h(
+              "button",
+              { type: "submit", class: "rd-panel-action", disabled: row.disabled },
+              h("span", { class: "rd-action-label" }, "Release"),
+              h("span", { class: "rd-action-pending", hidden: "" }, "Releasing…"),
+            ),
+          ),
+        ),
     ),
   );
 }
@@ -5818,342 +7467,13 @@ export function RedesignIsland() {
               () => rdEnvCompactText(),
             ),
           ),
-          // The compact setup spine expands into the operational shell. A
-          // native details keeps every recovery and lifecycle form usable on
-          // the SSR/no-script path; JavaScript only adds in-place repaint and
-          // focus polish. Games, layouts and maintenance deliberately do not
-          // join this payload — the next Library block owns those reads.
+          redesignProfileDisclosure(),
+          // Compact Tools keeps its own responsive home in the header. It is
+          // no longer trapped behind a setup panel.
           h(
-            "details",
-            { class: "rd-setupd" },
-            h(
-              "summary",
-              { class: "rd-setup-sum", title: "Setup progress, draft, session and input readiness" },
-              h("span", { class: "rd-setup-mark", "aria-hidden": "true" }, "◆"),
-              h("span", { class: "rd-setup-compact" }, () => rdJourneyCompact()),
-              h("span", { class: "rd-setup-divider", "aria-hidden": "true" }, "·"),
-              h("span", { class: "rd-draft-label" }, () => rdOpDraftLabel()),
-              h("span", { class: "rd-caret", "aria-hidden": "true" }, "⌄"),
-            ),
-            h(
-              "div",
-              { class: "rd-setup-panel" },
-              h(
-                "div",
-                { class: "rd-setup-panel-head" },
-                h(
-                  "div",
-                  null,
-                  h("span", { class: "n-kick" }, "Setup"),
-                  h("p", { class: "rd-setup-line" }, () => rdJourneyLine()),
-                ),
-                h("span", { class: "rd-refresh-health", role: "status", hidden: "" }),
-                h(
-                  "span",
-                  {
-                    class: "rd-buildmeta",
-                    title: "Studio build version — include this in a support report",
-                    "aria-label": "Studio build version",
-                  },
-                  "v",
-                  () => rdStudioVersion(),
-                ),
-              ),
-              h(
-                "div",
-                { class: "rd-utility-compact-home" },
-                redesignCompactToolsDisclosure(),
-              ),
-              h(
-                "nav",
-                { class: "rd-journey", "aria-label": "Setup progress" },
-                createList(
-                  () => rdJourneyRows(),
-                  (row) => `${row.key}|${row.action}|${row.badge}|${row.cls}|${row.title}|${row.detail}`,
-                  (row) =>
-                    h(
-                      "button",
-                      {
-                        type: "button",
-                        class: row.cls,
-                        "data-nx": "rd-journey-action",
-                        "data-journey-step": row.key,
-                        "data-journey-action": row.action,
-                        "aria-current": row.aria_current,
-                      },
-                      h("span", { class: "rd-journey-badge" }, row.badge),
-                      h(
-                        "span",
-                        { class: "rd-journey-copy" },
-                        h("strong", null, row.title),
-                        h("span", null, row.detail),
-                      ),
-                    ),
-                ),
-              ),
-              h(
-                "div",
-                { class: "rd-setup-grid" },
-                h(
-                  "section",
-                  { class: "rd-setup-card rd-draft-card", "aria-labelledby": "rd-draft-head" },
-                  h("h2", { id: "rd-draft-head" }, "Draft and saved setup"),
-                  h("p", { class: "rd-card-lede" }, () => rdOpDraftDetail()),
-                  h(
-                    "div",
-                    { class: "rd-saved-row" },
-                    h("strong", null, () => rdOpSavedLabel()),
-                    h("span", null, () => rdOpSavedDetail()),
-                  ),
-                  h(
-                    "form",
-                    { method: "post", action: "/redesign/adopt", "data-rd-form": "adopt" },
-                    h(
-                      "button",
-                      {
-                        type: "submit",
-                        class: "rd-panel-action",
-                        disabled: () => rdAdoptDisabled(),
-                        "aria-describedby": "rd-adopt-reason",
-                      },
-                      h("span", { class: "rd-action-label" }, () => rdAdoptLabel()),
-                      h("span", { class: "rd-action-pending", hidden: "" }, "Loading…"),
-                    ),
-                  ),
-                  h("p", { id: "rd-adopt-reason", class: "rd-action-reason" }, () => rdAdoptReason()),
-                  h(
-                    "details",
-                    { class: "rd-start-over" },
-                    h("summary", null, "Start over…"),
-                    h("p", { id: "rd-discard-reason", class: "rd-action-reason" }, () => rdDiscardReason()),
-                    h(
-                      "form",
-                      { method: "post", action: "/redesign/discard", "data-rd-form": "discard" },
-                      h("input", {
-                        type: "hidden",
-                        name: "expected_revision",
-                        value: () => rdDraftRevision(),
-                      }),
-                      h(
-                        "label",
-                        { class: () => rdDiscardConfirmCls() },
-                        h("input", {
-                          type: "checkbox",
-                          name: "confirm_discard",
-                          value: "yes",
-                          required: () => rdDraftDirty(),
-                        }),
-                        "Discard unsaved edits",
-                      ),
-                      h(
-                        "button",
-                        {
-                          type: "submit",
-                          class: "rd-panel-action danger",
-                          disabled: () => rdDiscardDisabled(),
-                          "aria-describedby": "rd-discard-reason",
-                        },
-                        h("span", { class: "rd-action-label" }, () => rdDiscardLabel()),
-                        h("span", { class: "rd-action-pending", hidden: "" }, "Clearing…"),
-                      ),
-                    ),
-                  ),
-                ),
-                h(
-                  "section",
-                  {
-                    class: () => rdOpSessionCls(),
-                    "aria-labelledby": "rd-session-head",
-                  },
-                  h("h2", { id: "rd-session-head" }, "Session"),
-                  h(
-                    "p",
-                    { class: "rd-state-strip", "aria-label": "Session state" },
-                    h(
-                      "span",
-                      {
-                        class: "rd-state-badge",
-                        "data-state": () => rdOpSessionBadgeState(),
-                      },
-                      () => rdOpSessionBadge(),
-                    ),
-                  ),
-                  h("p", { class: "rd-card-lede" }, () => rdOpSessionLine()),
-                  h("p", { class: "rd-escape-line" }, () => rdOpEscapeLine()),
-                  h("dl", { class: "rd-action-notes" },
-                    h("dt", null, "Save"),
-                    h("dd", { id: "rd-save-reason" }, () => rdSaveReason()),
-                    h("dt", null, "Play"),
-                    h("dd", { id: "rd-play-reason", tabindex: "-1" }, () => rdPlayReason()),
-                    h("dt", null, "Apply"),
-                    h("dd", { id: "rd-apply-reason" }, () => rdApplyReason()),
-                    h("dt", null, "Stop"),
-                    h("dd", { id: "rd-stop-reason" }, () => rdStopReason()),
-                  ),
-                  h(
-                    "p",
-                    { class: "rd-gamebar-help" },
-                    h(
-                      "span",
-                      null,
-                      "If a controller shortcut opens Xbox Game Bar or capture overlays interfere, check its Windows setting. ",
-                    ),
-                    h(
-                      "a",
-                      { href: "ms-settings:gaming-gamebar" },
-                      "Open Game Bar settings",
-                    ),
-                  ),
-                  h(
-                    "form",
-                    {
-                      class: () => rdReplacePlayCls(),
-                      method: "post",
-                      action: "/redesign/play",
-                      "data-rd-form": "play-replace",
-                    },
-                    h("input", {
-                      type: "hidden",
-                      name: "expected_revision",
-                      value: () => rdDraftRevision(),
-                    }),
-                    h(
-                      "button",
-                      {
-                        type: "submit",
-                        class: "rd-panel-action",
-                        disabled: () => rdPlayDisabled(),
-                        "aria-describedby": "rd-play-reason",
-                      },
-                      h("span", { class: "rd-action-label" }, "Replace session"),
-                      h("span", { class: "rd-action-pending", hidden: "" }, "Replacing…"),
-                    ),
-                  ),
-                ),
-                h(
-                  "section",
-                  {
-                    class: "rd-setup-card rd-capture-card",
-                    id: "rd-capture-readiness",
-                    tabindex: "-1",
-                    "data-capture-mode": () => rdCaptureMode(),
-                    "aria-labelledby": "rd-capture-head",
-                  },
-                  h("h2", { id: "rd-capture-head" }, () => rdCaptureHeading()),
-                  h(
-                    "p",
-                    { class: "rd-state-strip", "aria-label": "Input state" },
-                    h(
-                      "span",
-                      {
-                        class: "rd-state-badge",
-                        "data-state": () => rdCaptureStateTone(),
-                      },
-                      () => rdCaptureStateLabel(),
-                    ),
-                    h("span", { class: "rd-state-device" }, () => rdCaptureDeviceLabel()),
-                  ),
-                  h("p", { class: "rd-card-lede" }, () => rdCaptureLine()),
-                  h("p", { class: "rd-capture-recovery-line" }, () => rdCaptureRecoveryLine()),
-                  h(
-                    "form",
-                    {
-                      class: () => rdCapturePrepareCls(),
-                      method: "post",
-                      action: "/redesign/capture/prepare",
-                      "data-rd-form": "capture-prepare",
-                    },
-                    h("input", { type: "hidden", name: "expected_selector", value: () => rdCaptureSelector() }),
-                    h("input", { type: "hidden", name: "instance_id", value: () => rdCaptureInstance() }),
-                    h(
-                      "label",
-                      { class: "rd-consent" },
-                      h("input", { type: "checkbox", name: "confirm_spare_keyboard", value: "yes", required: "" }),
-                      h("span", null, "I connected and tested a different keyboard that can still type."),
-                    ),
-                    h(
-                      "label",
-                      { class: "rd-consent" },
-                      h("input", { type: "checkbox", name: "confirm_rebind", value: "yes", required: "" }),
-                      h("span", null, "I understand this exact input stops ordinary typing until I release it here."),
-                    ),
-                    h(
-                      "label",
-                      { class: "rd-consent" },
-                      h("input", { type: "checkbox", name: "confirm_machine_certificate", value: "yes", required: "" }),
-                      h("span", null, "I allow ksx to install its machine-local signing certificate for this generated driver package."),
-                    ),
-                    h(
-                      "button",
-                      {
-                        type: "submit",
-                        class: "rd-panel-action primary",
-                        "data-rd-product-disabled": "false",
-                      },
-                      h("span", { class: "rd-action-label" }, "Prepare this input"),
-                      h("span", { class: "rd-action-pending", hidden: "" }, "Preparing…"),
-                    ),
-                    h("p", { class: "rd-action-reason" }, "Windows will ask for permission. ksx stays open and returns here afterward."),
-                  ),
-                  h(
-                    "div",
-                    { class: () => rdCaptureHeldCls() },
-                    h("h3", null, "Keyboards held by ksx"),
-                    h("p", { class: "rd-action-reason" }, "Release is resolved from the current Windows device tree, even when the draft is empty."),
-                    createList(
-                      () => rdCaptureHeld(),
-                      (row) => row.key,
-                      (row) =>
-                        h(
-                          "article",
-                          {
-                            class: "rd-held-row",
-                            tabindex: "-1",
-                            "data-held-key": row.key,
-                            "data-held-selector": row.selector,
-                            "data-held-instance": row.instance,
-                          },
-                          h(
-                            "div",
-                            null,
-                            h("strong", null, row.name),
-                            h("span", null, row.summary),
-                            h("span", { class: "rd-held-note" }, row.note),
-                          ),
-                          h(
-                            "form",
-                            { method: "post", action: "/redesign/capture/release", "data-rd-form": "capture-release" },
-                            h("input", { type: "hidden", name: "expected_selector", value: row.selector }),
-                            h("input", { type: "hidden", name: "instance_id", value: row.instance }),
-                            h(
-                              "label",
-                              { class: "rd-consent compact" },
-                              h("input", {
-                                type: "checkbox",
-                                name: "confirm_release",
-                                value: "yes",
-                                required: "",
-                                disabled: row.disabled,
-                              }),
-                              h("span", null, "Return this keyboard to ordinary typing"),
-                            ),
-                            h(
-                              "button",
-                              {
-                                type: "submit",
-                                class: "rd-panel-action",
-                                disabled: row.disabled,
-                              },
-                              h("span", { class: "rd-action-label" }, "Release"),
-                              h("span", { class: "rd-action-pending", hidden: "" }, "Releasing…"),
-                            ),
-                          ),
-                        ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+            "div",
+            { class: "rd-utility-compact-home" },
+            redesignCompactToolsDisclosure(),
           ),
           // The workbench feed: open the device picker. Scripting-only
           // chrome (`.n-autobtn`), rightly — the canvas it feeds is too.
@@ -6207,13 +7527,21 @@ export function RedesignIsland() {
             "◇ Encoders",
           ),
           h("span", { class: "rd-spring" }),
-          // Operational actions stay visible and explain disabled states in
-          // the Setup disclosure. Play never implies Save; Apply never
-          // implies disk persistence; Stop remains a dedicated escape from
-          // the live session. This separation is the product contract.
+          // Operational actions stay visible and carry their disabled reason
+          // in header-owned descriptions. Play never implies Save; Apply
+          // never implies disk persistence; Stop is the live-session escape.
           h(
             "div",
             { class: "rd-run-actions", role: "group", "aria-label": "Lifecycle controls" },
+            h(
+              "div",
+              { class: "rd-action-reasons" },
+              h("span", { id: "rd-save-reason" }, () => rdSaveReason()),
+              h("span", { id: "rd-play-reason" }, () => rdPlayReason()),
+              h("span", { id: "rd-apply-reason" }, () => rdApplyReason()),
+              h("span", { id: "rd-stop-reason" }, () => rdStopReason()),
+            ),
+            h("p", { class: "rd-action-guidance" }, () => rdActionGuidance()),
             h(
               "span",
               {
@@ -6264,6 +7592,7 @@ export function RedesignIsland() {
                   class: "rd-runbtn",
                   disabled: () => rdSaveDisabled(),
                   "aria-describedby": "rd-save-reason",
+                  title: () => rdSaveReason(),
                 },
                 h("span", { class: "rd-action-label" }, () => rdSaveLabel()),
                 h("span", { class: "rd-action-pending", hidden: "" }, "Saving…"),
@@ -6284,9 +7613,36 @@ export function RedesignIsland() {
                   class: "rd-runbtn apply",
                   disabled: () => rdApplyDisabled(),
                   "aria-describedby": "rd-apply-reason",
+                  title: () => rdApplyReason(),
                 },
                 h("span", { class: "rd-action-label" }, () => rdApplyLabel()),
                 h("span", { class: "rd-action-pending", hidden: "" }, "Applying…"),
+              ),
+            ),
+            h(
+              "form",
+              {
+                class: () => rdReplacePlayCls(),
+                method: "post",
+                action: "/redesign/play",
+                "data-rd-form": "play-replace",
+              },
+              h("input", {
+                type: "hidden",
+                name: "expected_revision",
+                value: () => rdDraftRevision(),
+              }),
+              h(
+                "button",
+                {
+                  type: "submit",
+                  class: "rd-runbtn replace",
+                  disabled: () => rdPlayDisabled(),
+                  "aria-describedby": "rd-play-reason",
+                  title: () => rdPlayReason(),
+                },
+                h("span", { class: "rd-action-label" }, "Restart"),
+                h("span", { class: "rd-action-pending", hidden: "" }, "Restarting…"),
               ),
             ),
             h(
@@ -6304,6 +7660,7 @@ export function RedesignIsland() {
                   class: "rd-runbtn primary",
                   disabled: () => rdPlayDisabled(),
                   "aria-describedby": "rd-play-reason",
+                  title: () => rdPlayReason(),
                 },
                 h("span", { class: "rd-action-icon", "aria-hidden": "true" }, "▷"),
                 h("span", { class: "rd-action-label" }, () => rdPlayLabel()),
@@ -6320,6 +7677,7 @@ export function RedesignIsland() {
                   class: "rd-runbtn stop",
                   disabled: () => rdStopDisabled(),
                   "aria-describedby": "rd-stop-reason",
+                  title: () => rdStopReason(),
                 },
                 h("span", { class: "rd-action-icon", "aria-hidden": "true" }, "■"),
                 h("span", { class: "rd-action-label" }, () => rdStopLabel()),
@@ -6486,6 +7844,8 @@ export function RedesignIsland() {
             "Retry now",
           ),
         ),
+        redesignCaptureRecoverySheet(),
+        redesignNativeCaptureFallback(),
         // Identify is also a native transaction. The modal is intentionally
         // scripting-only, so this compact server form is its no-script door:
         // the same next-key listen, the same explicit staging consequence,
@@ -6709,9 +8069,7 @@ export function RedesignIsland() {
               h("h3", { class: "rd-devhead" }, () => rdDevKbHead()),
               createList(
                 () => rdDevKb(),
-                (r) =>
-                  r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title +
-                  "|" + r.aria_current + "|" + (r.staged_revision ?? ""),
+                deviceRowRenderKey,
                 (r) =>
                   h(
                     "button",
@@ -6768,9 +8126,7 @@ export function RedesignIsland() {
               h("h3", { class: "rd-devhead" }, () => rdDevEncHead()),
               createList(
                 () => rdDevEnc(),
-                (r) =>
-                  r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title +
-                  "|" + r.aria_current + "|" + (r.staged_revision ?? ""),
+                deviceRowRenderKey,
                 (r) =>
                   h(
                     "button",
@@ -6836,9 +8192,7 @@ export function RedesignIsland() {
               h("h3", { class: "rd-devhead" }, () => rdDevExpHead()),
               createList(
                 () => rdDevExp(),
-                (r) =>
-                  r.selector + "|" + r.name + "|" + r.meta + "|" + r.cls + "|" + r.title +
-                  "|" + r.aria_current + "|" + (r.staged_revision ?? ""),
+                deviceRowRenderKey,
                 (r) =>
                   h(
                     "button",

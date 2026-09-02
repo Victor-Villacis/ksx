@@ -1961,6 +1961,11 @@ impl ksx_api::MachineSource for NoMachine {
                              interface."
                 .into(),
             interception_available: false,
+            // This is a complete synthetic inventory, not a partial machine
+            // read. Both transport passes are therefore authoritative even
+            // though their rows are fixture data and no hardware was read.
+            usb_available: true,
+            bluetooth_available: true,
             boards: vec![
                 ksx_api::BoardRow {
                     name: "Ultimarc I-PAC 4".into(),
@@ -2485,6 +2490,32 @@ mod tests {
                 .contains("no physical devices are read or written"));
             assert_eq!(environment.generation, "launch-test-42");
         }
+    }
+
+    #[test]
+    fn completed_fixture_inventory_is_authoritative_for_both_transports() {
+        let store = Store::new(FixtureScenario::Seeded);
+        let machine = NoMachine {
+            scenario: FixtureScenario::Seeded,
+            saved_stage: Arc::clone(&store.saved_stage),
+            autostart: AtomicBool::new(false),
+            panel_backup_created: AtomicBool::new(false),
+            winusb_prepared: AtomicBool::new(false),
+        };
+        let scan =
+            ksx_api::MachineSource::device_scan(&machine).expect("the synthetic inventory answers");
+
+        assert!(scan.usb_available);
+        assert!(scan.bluetooth_available);
+        assert!(scan.has_full_absence_authority());
+        assert!(scan
+            .boards
+            .iter()
+            .any(|board| board.transport_label == "USB"));
+        assert!(scan
+            .boards
+            .iter()
+            .any(|board| board.transport_label == "Bluetooth"));
     }
 
     #[test]

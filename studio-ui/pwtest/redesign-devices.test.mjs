@@ -1184,8 +1184,7 @@ describe("the device workbench", () => {
         "the board exposes one roving keyboard entry point",
       );
       await node.focus();
-      await page.getByRole("button", { name: "Pan it to the middle (C)", exact: true })
-        .evaluate((button) => button.click());
+      await page.keyboard.press("c");
       await page.locator('[data-nx="rd-z-100"]').evaluate((button) => button.click());
       await page.waitForFunction(
         () => document.querySelector(".n-zoomval")?.textContent?.trim() === "100%" &&
@@ -1316,32 +1315,8 @@ describe("the device workbench", () => {
         IPAC_SLUG,
       );
 
-      // The engine's supported minimum manual scale is exactly 60%. F2 must
-      // cross the editing boundary even with floating-point multiplication,
-      // then restore real (not merely present) terminal controls.
-      for (let step = 0; step < 4; step += 1) {
-        await page.getByRole("button", { name: "Smaller", exact: true }).click();
-      }
-      assert.equal(await node.getAttribute("data-canvas-manual-scale"), "0.6");
-      await node.focus();
-      await node.press("F2");
-      await page.waitForFunction((id) => {
-        const item = document.querySelector(`[data-instance-id="${id}"]`);
-        const host = item?.querySelector(
-          '.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host',
-        );
-        return item?.getAttribute("data-encoder-editable") === "true" && host?.inert === false;
-      }, IPAC_SLUG);
-      assert.ok(
-        await page.evaluate((id) => {
-          const item = document.querySelector(`[data-instance-id="${id}"]`);
-          const viewport = document.querySelector(".forma-canvas-viewport");
-          return Number(item?.getAttribute("data-canvas-manual-scale")) *
-            Number(viewport?.style.getPropertyValue("--canvas-zoom")) > 0.9;
-        }, IPAC_SLUG),
-        "minimum-scale entry keeps a positive safety margin above the 44px boundary",
-      );
-      await page.getByRole("button", { name: "Reset size", exact: true }).click();
+      // Physical inputs no longer open the generic geometry Inspector: the
+      // board-local F2/Open-controls path owns their operational surface.
       await page.locator('[data-nx="rd-z-100"]').evaluate((button) => button.click());
 
       const testHelp = node.locator(
@@ -2032,6 +2007,8 @@ describe("the device workbench", () => {
       const payload = await response.json();
       if (!authoritative) {
         payload.devices.scan_authoritative = false;
+        payload.devices.usb_scan_authoritative = false;
+        payload.devices.bluetooth_scan_authoritative = false;
         payload.devices.scan_line = "Device scan unavailable — retain last confirmed results.";
         for (const tier of ["keyboards", "encoders", "experimental", "other"]) {
           payload.devices[tier] = [];
@@ -2088,6 +2065,12 @@ describe("the device workbench", () => {
           .scanAuthoritative === "false",
         IPAC_SLUG,
         { timeout: 10_000 },
+      );
+      await page.waitForFunction(
+        (id) => document.querySelector(`[data-instance-id="${id}"]`)?.dataset
+          .connectionKnown === "false",
+        IPAC_SLUG,
+        { timeout: 5_000 },
       );
       assert.equal(await node.count(), 1, "an unanswered scan does not remove the encoder");
       assert.equal(
@@ -2900,7 +2883,14 @@ describe("the device workbench", () => {
       const response = await route.fetch();
       const payload = await response.json();
       if (rosterMode === "absent") {
+        payload.devices.scan_authoritative = true;
+        payload.devices.usb_scan_authoritative = true;
+        payload.devices.bluetooth_scan_authoritative = true;
         payload.devices.encoders = payload.devices.encoders.filter((row) => row.selector !== IPAC);
+      } else {
+        payload.devices.scan_authoritative = true;
+        payload.devices.usb_scan_authoritative = true;
+        payload.devices.bluetooth_scan_authoritative = true;
       }
       await route.fulfill({ response, json: payload });
     });
@@ -2935,7 +2925,7 @@ describe("the device workbench", () => {
     await closePage(page);
   });
 
-  test("selected picker removal clears the Inspector and survives a reload", async () => {
+  test("selected picker removal clears the board and survives a reload", async () => {
     const page = await openBench();
     await page.click('[data-nx="rd-devs-open"]');
     for (const selector of [G915, IPAC]) {
@@ -2953,7 +2943,11 @@ describe("the device workbench", () => {
     }
     await page.keyboard.press("Escape");
     await revealCanvasItem(page, G915_SLUG);
-    await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === false);
+    assert.equal(
+      await page.locator(".rd-inspector:not([hidden])").count(),
+      0,
+      "selecting a physical source keeps its controls on the board",
+    );
     await page.click('[data-nx="rd-devs-open"]');
     await page.click(`.rd-devmodal button[data-selector="${G915}"]`);
     await page.waitForFunction(
@@ -2971,7 +2965,7 @@ describe("the device workbench", () => {
     assert.equal(
       await page.locator(".rd-inspector[hidden]").count(),
       1,
-      "removing the selected board closes its Inspector behind the picker",
+      "removing a selected physical board leaves no stale Inspector behind the picker",
     );
     assert.equal(
       await page.locator(".rd.is-inspector-open").count(),
@@ -3396,6 +3390,8 @@ describe("the device workbench", () => {
       ];
       payload.devices.keyboards_head = "KEYBOARDS · 2";
       payload.devices.scan_authoritative = true;
+      payload.devices.usb_scan_authoritative = true;
+      payload.devices.bluetooth_scan_authoritative = true;
       payload.devices.staging_reachable = true;
       await route.fulfill({ response, json: payload });
     });
@@ -3653,6 +3649,8 @@ describe("the device workbench", () => {
     let removedSelector = "";
     let removedAuthority = null;
     let servedDraftRevision = "";
+    let removalGate = Promise.resolve();
+    let markRemovalSeen = () => {};
 
     await page.route("**/api/redesign*", async (route) => {
       const response = await route.fetch();
@@ -3704,6 +3702,8 @@ describe("the device workbench", () => {
         ? "n-devfold"
         : "n-devfold none";
       payload.devices.scan_authoritative = true;
+      payload.devices.usb_scan_authoritative = true;
+      payload.devices.bluetooth_scan_authoritative = true;
       payload.devices.staging_reachable = true;
 
       const pad = payload.controllers.pads[0];
@@ -3770,6 +3770,8 @@ describe("the device workbench", () => {
         draft: body.get("expected_revision"),
         source: body.get("expected_source_revision"),
       };
+      markRemovalSeen();
+      await removalGate;
       twinStaged = false;
       await route.fulfill({ status: 204 });
     });
@@ -3839,6 +3841,15 @@ describe("the device workbench", () => {
       assert.equal(await twin.locator("[data-rd-keyboard-surface]").count(), 0);
       assert.equal(await twin.getAttribute("data-source-enabled"), "unknown");
       assert.equal(await twin.getAttribute("data-mapping-available"), "false");
+      assert.notEqual(
+        await primary.getAttribute("aria-label"),
+        await twin.getAttribute("aria-label"),
+        "a connected board and its same-model disconnected peer keep exact-device labels",
+      );
+      assert.match(
+        (await twin.getAttribute("aria-label")) ?? "",
+        /recovery connection|connection 01/i,
+      );
       assert.equal(
         await twin.evaluate((item) => document.activeElement === item),
         true,
@@ -3870,6 +3881,50 @@ describe("the device workbench", () => {
         })),
         twinGeometry,
         "the recovery card retains the physical board's geometry",
+      );
+
+      await page.click('button.n-autobtn[data-nx="canvas-fit"]:not(.rd-menu-row)');
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"]`,
+        )?.dataset.deviceOperationsInteractive === "false",
+        G915_TWIN_SLUG,
+      );
+      const offlineOperations = twin.locator("[data-rd-device-operations]");
+      const offlineLauncher = twin.locator('[data-nx="rd-open-device-controls"]');
+      assert.equal(await offlineOperations.isHidden(), true);
+      assert.equal(await offlineOperations.evaluate((node) => node.inert), true);
+      await offlineLauncher.waitFor({ state: "visible" });
+      await offlineLauncher.click();
+      await page.waitForFunction(
+        (id) => {
+          const item = document.querySelector(
+            `.forma-canvas-stage > [data-instance-id="${id}"]`,
+          );
+          const operations = item?.querySelector("[data-rd-device-operations]");
+          return item?.dataset.deviceOperationsInteractive === "true" &&
+            operations?.hidden === false && operations?.inert === false &&
+            operations.contains(document.activeElement);
+        },
+        G915_TWIN_SLUG,
+      );
+      assert.match((await offlineOperations.textContent()) ?? "", /Reconnect this exact input/i);
+      assert.doesNotMatch(
+        (await offlineOperations.textContent()) ?? "",
+        /Every key on this routed keyboard|Mapped keys/i,
+        "an identity-unknown offline source uses neutral policy and capture copy",
+      );
+      const offlinePolicy = offlineOperations.locator('[data-nx="rd-shared-policy"]');
+      assert.equal(await offlinePolicy.isEnabled(), true);
+      await offlinePolicy.click();
+      const offlinePolicyEditor = page.locator("#rd-shared-policy-editor[open]");
+      await offlinePolicyEditor.waitFor({ state: "visible" });
+      await offlinePolicy.click();
+      await offlinePolicyEditor.waitFor({ state: "hidden" });
+      assert.equal(
+        await offlinePolicy.evaluate((button) => document.activeElement === button),
+        true,
+        "the disconnected source retains a keyboard-reachable policy recovery door",
       );
       await page.click('[data-nx="rd-devs-open"]');
       const offlineRow = page.locator(
@@ -3915,14 +3970,59 @@ describe("the device workbench", () => {
       );
       assert.equal(await twin.evaluate((item) => document.activeElement === item), true);
       assert.equal(await twin.getAttribute("aria-current"), "true");
-      const removeDisconnected = twin.getByRole("button", {
-        name: "Remove disconnected source",
-      });
+      const removeDisconnected = twin.locator('[data-nx="rd-offline-remove"]');
+      assert.equal(
+        await twin.getByRole("button", { name: "Remove disconnected source" }).count(),
+        1,
+        "the disconnected source exposes a specifically named removal action",
+      );
       await revealCanvasItem(page, G915_TWIN_SLUG);
       await twin.focus();
       await twin.press("F2");
       await removeDisconnected.waitFor({ state: "visible", timeout: 15_000 });
+      let releaseRemoval;
+      removalGate = new Promise((resolve) => {
+        releaseRemoval = resolve;
+      });
+      let seeRemoval;
+      const removalSeen = new Promise((resolve) => {
+        seeRemoval = resolve;
+      });
+      markRemovalSeen = seeRemoval;
       await removeDisconnected.click();
+      try {
+        await Promise.race([
+          removalSeen,
+          new Promise((_, reject) => setTimeout(
+            () => reject(new Error("the exact-source removal request was not issued")),
+            10_000,
+          )),
+        ]);
+      } catch (error) {
+        const diagnostic = await page.evaluate((id) => {
+          const root = document.querySelector("[data-forma-island]");
+          const item = document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`);
+          const button = item?.querySelector('[data-nx="rd-offline-remove"]');
+          return {
+            active: document.activeElement?.outerHTML?.slice(0, 240) ?? "",
+            mutationPending: root?.getAttribute("data-rd-mutation-pending"),
+            buttonDisabled: button?.disabled,
+            buttonBusy: button?.getAttribute("aria-busy"),
+            buttonText: button?.textContent?.trim(),
+            sourceState: item?.getAttribute("data-source-enabled"),
+          };
+        }, G915_TWIN_SLUG);
+        throw new Error(`${error.message}: ${JSON.stringify(diagnostic)}`);
+      }
+      assert.equal(await removeDisconnected.getAttribute("aria-busy"), "true");
+      assert.equal((await removeDisconnected.textContent())?.trim(), "Removing…");
+      assert.equal(await page.locator('[data-nx="rd-rescan"]').isDisabled(), true);
+      assert.equal(
+        await page.locator('[data-nx="rd-dev-toggle"]:not(:disabled)').count(),
+        0,
+        "offline removal locks picker membership until its guarded commit settles",
+      );
+      releaseRemoval();
       await page.waitForFunction(
         (id) => !document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`),
         G915_TWIN_SLUG,
@@ -3934,6 +4034,17 @@ describe("the device workbench", () => {
       });
       assert.equal(await primary.locator("[data-rd-keyboard-surface]").count(), 1);
       assert.equal(new URL(page.url()).searchParams.get("source"), G915);
+      await page.waitForFunction(
+        (id) => document.activeElement === document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"]`,
+        ),
+        G915_SLUG,
+      );
+      assert.equal(
+        await primary.getAttribute("aria-current"),
+        "true",
+        "removing the focused offline source selects its surviving peer",
+      );
       assert.deepEqual(noise, []);
     } finally {
       await page.unrouteAll({ behavior: "wait" });
@@ -3989,8 +4100,13 @@ describe("the device workbench", () => {
       await route.continue();
     });
     let deviceRequests = 0;
+    let freshRequests = 0;
     page.on("request", (request) => {
-      if (new URL(request.url()).pathname === "/redesign/device") deviceRequests += 1;
+      const url = new URL(request.url());
+      if (url.pathname === "/redesign/device") deviceRequests += 1;
+      if (url.pathname === "/api/redesign" && url.searchParams.get("fresh") === "1") {
+        freshRequests += 1;
+      }
     });
     try {
       const requestStarted = page.waitForRequest(`${BASE}/redesign/device`);
@@ -4001,11 +4117,21 @@ describe("the device workbench", () => {
         0,
         "Theme cannot race a Device request's full-payload repaint",
       );
-      assert.ok(
-        await page.locator('.rd-devmodal [data-nx="rd-dev-toggle"]:not(:disabled)').count() > 0,
-        "the multi-add tray remains browsable while the request owns mutation authority",
+      assert.equal(
+        await page.locator('.rd-devmodal [data-nx="rd-dev-toggle"]:not(:disabled)').count(),
+        0,
+        "every picker toggle joins the transaction lock while one exact source is changing",
       );
-      await g915PickerRow.click();
+      assert.equal(await g915PickerRow.getAttribute("aria-busy"), "true");
+      assert.equal((await g915PickerRow.locator(".rd-dev-word").textContent())?.trim(), "Adding…");
+      const rescan = page.locator('[data-nx="rd-rescan"]');
+      assert.equal(await rescan.isDisabled(), true, "Rescan cannot sample pre-commit device truth");
+      await g915PickerRow.evaluate((button) => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      });
+      await rescan.evaluate((button) => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      });
       await page.waitForTimeout(50);
       assert.equal(
         deviceRequests,
@@ -4017,6 +4143,7 @@ describe("the device workbench", () => {
         0,
         "the board mounts only after staged-source authority commits",
       );
+      assert.equal(freshRequests, 0, "a forced disabled Rescan cannot overlap the pending commit");
       releaseRequest();
       await page.waitForFunction(
         (id) =>
@@ -4036,6 +4163,8 @@ describe("the device workbench", () => {
         0,
         "the shared lock releases after repaint",
       );
+      assert.equal(await g915PickerRow.getAttribute("aria-busy"), null);
+      assert.match((await g915PickerRow.locator(".rd-dev-word").textContent()) ?? "", /On canvas/);
       assert.equal(
         await page.locator(
           `.forma-canvas-stage [data-instance-id="${G915_SLUG}"] .rd-stagebtn`,
@@ -4048,6 +4177,95 @@ describe("the device workbench", () => {
       await page.unrouteAll({ behavior: "wait" });
     }
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await closePage(page);
+  });
+
+  test("Rescan owns the island so no pre-commit roster can overlap a mutation", async () => {
+    const page = await openBench();
+    await page.click('[data-nx="rd-devs-open"]');
+    const rescan = page.locator('[data-nx="rd-rescan"]');
+    let releaseFresh;
+    const freshGate = new Promise((resolve) => {
+      releaseFresh = resolve;
+    });
+    let markFreshSeen;
+    const freshSeen = new Promise((resolve) => {
+      markFreshSeen = resolve;
+    });
+    let freshRequests = 0;
+    let themeRequests = 0;
+    let deviceRequests = 0;
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/redesign" && url.searchParams.get("fresh") === "1") {
+        freshRequests += 1;
+      }
+      if (url.pathname === "/redesign/theme") themeRequests += 1;
+      if (url.pathname === "/redesign/device") deviceRequests += 1;
+    });
+    await page.route("**/api/redesign*", async (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get("fresh") !== "1") {
+        await route.continue();
+        return;
+      }
+      markFreshSeen();
+      await freshGate;
+      const response = await route.fetch();
+      await route.fulfill({ response });
+    });
+
+    try {
+      await rescan.click();
+      await freshSeen;
+      assert.equal(await rescan.getAttribute("aria-busy"), "true");
+      assert.equal((await rescan.textContent())?.trim(), "Rescanning…");
+      assert.equal(
+        await page.locator('.rd-devmodal [data-nx="rd-dev-toggle"]:not(:disabled)').count(),
+        0,
+        "a roster read locks every exact-device membership action",
+      );
+      assert.equal(
+        await page.locator('.rd-thememenu button[type="submit"]:not(:disabled)').count(),
+        0,
+        "a product mutation cannot commit behind an older Rescan payload",
+      );
+
+      const themeForm = page.locator('.rd-thememenu form[data-rd-form="theme"]').first();
+      await themeForm.evaluate((form) => {
+        const submitter = form.querySelector('button[type="submit"]');
+        form.dispatchEvent(new SubmitEvent("submit", {
+          bubbles: true,
+          cancelable: true,
+          submitter,
+        }));
+      });
+      const deviceRow = page.locator('.rd-devmodal [data-nx="rd-dev-toggle"]').first();
+      await deviceRow.evaluate((button) => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      });
+      await page.waitForTimeout(50);
+      assert.equal(themeRequests, 0);
+      assert.equal(deviceRequests, 0);
+      assert.equal(freshRequests, 1, "one Rescan owns one fresh authority request");
+    } finally {
+      releaseFresh();
+    }
+    await page.waitForFunction(
+      () => document.querySelector("[data-forma-island]")?.dataset.rdMutationPending !== "true",
+      null,
+      { timeout: 10_000 },
+    );
+    assert.equal(await rescan.getAttribute("aria-busy"), null);
+    assert.equal((await rescan.textContent())?.trim(), "Rescan");
+    assert.equal(await rescan.isEnabled(), true);
+    assert.equal(await rescan.evaluate((button) => document.activeElement === button), true);
+    assert.ok(
+      await page.locator('.rd-devmodal [data-nx="rd-dev-toggle"]:not(:disabled)').count() > 0,
+      "the picker unlocks after authoritative Rescan settles",
+    );
+    await page.unrouteAll({ behavior: "wait" });
+    assert.deepEqual(page.ksxNoise, []);
     await closePage(page);
   });
 
@@ -4134,6 +4352,213 @@ describe("the device workbench", () => {
     await closePage(page);
   });
 
+  test("a partial scan keeps present USB truth actionable while unresolved Bluetooth absence stays unknown", async () => {
+    const partialContext = await browser.newContext({
+      viewport: { width: 2200, height: 1100 },
+      colorScheme: "dark",
+    });
+    const page = await partialContext.newPage();
+    const noise = [];
+    const bluetoothSelector = "BTHENUM\\DEV_KEYCHRON_Q1_HE\\FIXTURE";
+    const bluetoothSlug = deviceInstanceId(bluetoothSelector);
+    let bluetoothScanUnavailable = false;
+    let usbStaged = true;
+    page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") noise.push(`console: ${message.text()}`);
+    });
+
+    await page.route("**/api/redesign*", async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      const original = payload.devices.keyboards.find((row) => row.selector === G915);
+      assert.ok(original, "the fixture must serve its concrete USB keyboard row");
+      const usbKeyboard = {
+        ...original,
+        aria_current: usbStaged ? "true" : "false",
+        staged_revision: "partial-usb-r1",
+      };
+      const bluetoothKeyboard = {
+        ...original,
+        selector: bluetoothSelector,
+        instance_id: "HID\\VID_3434&PID_0B10\\KEYCHRON-Q1-HE",
+        name: "Keychron Q1 HE",
+        alias: "keychron-q1-he",
+        label: "Keychron Q1 HE · Bluetooth",
+        connection_label: "Bluetooth · Keychron Q1 HE",
+        meta: "Bluetooth · Ready to use",
+        title: "Keychron Q1 HE · Bluetooth",
+        aria_current: "true",
+        staged_revision: "partial-bluetooth-r1",
+      };
+      for (const tier of ["keyboards", "encoders", "experimental", "other"]) {
+        payload.devices[tier] = (payload.devices[tier] ?? []).filter(
+          (row) => row.selector !== G915 && row.selector !== bluetoothSelector,
+        );
+      }
+      if (usbStaged) payload.devices.keyboards.push(usbKeyboard);
+      if (!bluetoothScanUnavailable) payload.devices.keyboards.push(bluetoothKeyboard);
+      payload.devices.keyboards_head = `Keyboards · ${payload.devices.keyboards.length}`;
+      payload.devices.scan_authoritative = !bluetoothScanUnavailable;
+      payload.devices.usb_scan_authoritative = true;
+      payload.devices.bluetooth_scan_authoritative = !bluetoothScanUnavailable;
+      payload.devices.scan_line = bluetoothScanUnavailable
+        ? "Bluetooth scan unavailable; USB discovery answered."
+        : payload.devices.scan_line;
+      payload.devices.staging_reachable = true;
+      if (!usbStaged) {
+        for (const pad of payload.controllers?.pads ?? []) {
+          pad.sources = (pad.sources ?? []).filter((source) => source.source_id !== G915);
+        }
+      }
+      await route.fulfill({ response, json: payload });
+    });
+
+    try {
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.waitForFunction(
+        () => Boolean(document.querySelector(".forma-canvas-stage")?.style.transform),
+        null,
+        { timeout: 20_000 },
+      );
+      await page.click('[data-nx="rd-devs-open"]');
+      const usbPickerRow = page.locator(
+        `.rd-devmodal [data-nx="rd-dev-toggle"][data-selector="${G915}"]`,
+      );
+      const bluetoothPickerRow = page.locator('.rd-devmodal [data-nx="rd-dev-toggle"]')
+        .filter({ hasText: "Keychron Q1 HE" });
+      for (const row of [usbPickerRow, bluetoothPickerRow]) {
+        await row.waitFor({ state: "visible" });
+        if ((await row.getAttribute("aria-pressed")) !== "true") await row.click();
+      }
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(
+        ([usbId, bluetoothId]) => [usbId, bluetoothId].every((id) =>
+          document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)
+        ),
+        [G915_SLUG, bluetoothSlug],
+      );
+      await page.locator('[data-nx="rd-z-100"]').evaluate((button) => button.click());
+      await page.waitForFunction(
+        () => document.querySelector(".forma-canvas-viewport")?.dataset.canvasZoomTier ===
+          "editing" && !document.querySelector(".is-camera-animating"),
+      );
+
+      bluetoothScanUnavailable = true;
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="matrix"]) button');
+      await page.waitForFunction(
+        ([usbId, bluetoothId]) => {
+          const usb = document.querySelector(
+            `.forma-canvas-stage > [data-instance-id="${usbId}"]`,
+          );
+          const bluetooth = document.querySelector(
+            `.forma-canvas-stage > [data-instance-id="${bluetoothId}"]`,
+          );
+          return usb?.dataset.sourceEnabled === "true" &&
+            usb.dataset.mappingAvailable === "true" &&
+            bluetooth?.dataset.sourceEnabled === "unknown" &&
+            bluetooth.dataset.mappingAvailable === "false";
+        },
+        [G915_SLUG, bluetoothSlug],
+        { timeout: 10_000 },
+      );
+
+      const usbBoard = page.locator(
+        `.forma-canvas-stage > [data-instance-id="${G915_SLUG}"]`,
+      );
+      const bluetoothBoard = page.locator(
+        `.forma-canvas-stage > [data-instance-id="${bluetoothSlug}"]`,
+      );
+      await usbBoard.focus();
+      await page.keyboard.press("F2");
+      await page.waitForFunction(
+        (id) => {
+          const board = document.querySelector(
+            `.forma-canvas-stage > [data-instance-id="${id}"]`,
+          );
+          return board?.dataset.keyboardEditable === "true" &&
+            !document.querySelector(".is-camera-animating");
+        },
+        G915_SLUG,
+      );
+      assert.equal(await usbBoard.getAttribute("data-source-enabled"), "true");
+      assert.equal(await usbBoard.getAttribute("data-mapping-available"), "true");
+      assert.match(
+        (await usbBoard.locator("[data-rd-keyboard-mapping-status]").textContent()) ?? "",
+        /Independent source/i,
+        "a concrete row is positive connection authority even when another transport fails",
+      );
+      const usbSurface = usbBoard.locator("[data-rd-keyboard-surface]");
+      assert.equal(await usbSurface.evaluate((surface) => surface.inert), false);
+      assert.equal(await usbSurface.getAttribute("aria-hidden"), null);
+      assert.ok(
+        await usbSurface.locator('button.n-key:not(.ghost)[data-key]:not([data-key=""])')
+          .evaluateAll((keys) => keys.filter((key) =>
+            !key.disabled && !key.closest("[inert]")
+          ).length) > 80,
+        "the present keyboard keeps its native mapping keys actionable",
+      );
+      const usbOperations = usbBoard.locator("[data-rd-device-operations]");
+      assert.equal(await usbOperations.evaluate((node) => node.inert), false);
+      assert.equal(
+        await usbOperations.locator('[data-nx="rd-shared-policy"]').isEnabled(),
+        true,
+        "the exact present board keeps staging-owned operations available",
+      );
+
+      assert.equal(await bluetoothBoard.count(), 1, "unknown absence keeps the saved board");
+      assert.equal(await bluetoothBoard.getAttribute("data-source-enabled"), "unknown");
+      assert.equal(await bluetoothBoard.getAttribute("data-mapping-available"), "false");
+      assert.match(
+        (await bluetoothBoard.locator("[data-rd-keyboard-mapping-status]").textContent()) ?? "",
+        /Connection status unavailable.*mapping are paused/i,
+      );
+      const bluetoothSurface = bluetoothBoard.locator("[data-rd-keyboard-surface]");
+      assert.equal(await bluetoothSurface.evaluate((surface) => surface.inert), true);
+      assert.equal(await bluetoothSurface.getAttribute("aria-hidden"), "true");
+
+      await page.click('[data-nx="rd-devs-open"]');
+      const refreshedUsbRow = page.locator(
+        `.rd-devmodal [data-nx="rd-dev-toggle"][data-selector="${G915}"]`,
+      );
+      assert.equal(await refreshedUsbRow.isEnabled(), true);
+      assert.equal(await refreshedUsbRow.getAttribute("aria-current"), "true");
+      assert.equal(
+        await page.locator('.rd-devmodal [data-nx="rd-dev-toggle"]')
+          .filter({ hasText: "Keychron Q1 HE" }).count(),
+        0,
+        "the unavailable transport does not manufacture a current device row",
+      );
+      await page.locator('[data-nx="rd-devs-close"]').click();
+
+      usbStaged = false;
+      await page.click(".rd-themed > summary");
+      await page.click('.rd-thememenu form:has(input[value="dark"]) button');
+      await page.waitForFunction(
+        (id) => !document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"]`,
+        ),
+        G915_SLUG,
+        { timeout: 10_000 },
+      );
+      assert.equal(
+        await bluetoothBoard.count(),
+        1,
+        "USB authority removes its missing board while unavailable Bluetooth preserves its peer",
+      );
+      assert.deepEqual(noise, []);
+    } finally {
+      await page.unrouteAll({ behavior: "wait" });
+      await closeContext(partialContext);
+    }
+  });
+
   test("provider unknown is preserved, authoritative absence unmounts, and return restores geometry", async () => {
     const page = await openBench();
     const item = page.locator(`.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`);
@@ -4148,6 +4573,11 @@ describe("the device workbench", () => {
           ?.dataset.canvasX !== undefined,
       G915_SLUG,
     );
+    await page.evaluate((selector) => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("source", selector);
+      window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+    }, G915);
     let rosterMode = "staging-unreachable";
     await page.route("**/api/redesign*", async (route) => {
       const response = await route.fetch();
@@ -4156,21 +4586,38 @@ describe("the device workbench", () => {
         for (const tier of ["keyboards", "encoders", "experimental", "other"]) {
           for (const row of payload.devices[tier] ?? []) {
             row.aria_current = row.selector === G915 ? "true" : "false";
+            if (row.selector === G915) {
+              row.capture_mode = "release";
+              row.capture_badge = "Prepared";
+              row.capture_state = "ready";
+              row.capture_detail = "This exact keyboard is held by ksx.";
+              row.capture_action_label = "Release this input";
+              row.capture_can_prepare = false;
+              row.capture_can_release = true;
+            }
           }
         }
         payload.devices.staging_reachable = false;
         payload.devices.staging_line = "Staging unavailable — test helper did not answer.";
       } else if (rosterMode === "unknown-scan") {
         payload.devices.scan_authoritative = false;
+        payload.devices.usb_scan_authoritative = false;
+        payload.devices.bluetooth_scan_authoritative = false;
         payload.devices.scan_line = "Device scan unavailable — try again.";
         for (const tier of ["keyboards", "encoders", "experimental", "other"]) {
           payload.devices[tier] = [];
         }
       } else if (rosterMode === "absent") {
+        payload.devices.scan_authoritative = true;
+        payload.devices.usb_scan_authoritative = true;
+        payload.devices.bluetooth_scan_authoritative = true;
         for (const tier of ["keyboards", "encoders", "experimental"]) {
           payload.devices[tier] = payload.devices[tier].filter((row) => row.selector !== G915);
         }
       } else if (rosterMode === "full") {
+        payload.devices.scan_authoritative = true;
+        payload.devices.usb_scan_authoritative = true;
+        payload.devices.bluetooth_scan_authoritative = true;
         for (const tier of ["keyboards", "encoders", "experimental", "other"]) {
           for (const row of payload.devices[tier] ?? []) {
             row.aria_current = row.selector === G915 ? "true" : "false";
@@ -4195,16 +4642,94 @@ describe("the device workbench", () => {
         "a keyboard board never regresses to the retired card-level staging verb",
       );
       assert.equal(await item.getAttribute("data-mapping-available"), "false");
+      assert.equal(
+        new URL(page.url()).searchParams.get("source"),
+        G915,
+        "a nonauthoritative staging read preserves exact authoring context",
+      );
       await page.waitForFunction(() => !document.querySelector("[data-rd-mutation-pending]"));
+      // A crowded workbench can attenuate an off-centre board below its
+      // manual scale. F2 must calculate from that rendered scale and still
+      // expose the recovery controls during a provider outage.
+      // Prior cases deliberately leave a crowded persistent arrangement; use
+      // the product's minimap route before focusing so this test never asks an
+      // intentionally parked/inert board to accept a synthetic keypress.
+      await revealCanvasItem(page, G915_SLUG);
+      await item.evaluate((board) => {
+        board.dataset.attentionScale = "0.72";
+        board.style.setProperty("--widget-attention-scale", "0.72");
+      });
       await item.focus();
-      await page.keyboard.press("Enter");
+      await page.keyboard.press("F2");
       await page.waitForFunction(
-        () => document.querySelector(".forma-canvas-viewport")?.dataset.canvasZoomTier === "editing",
+        (id) => {
+          const board = document.querySelector(
+            `.forma-canvas-stage > [data-instance-id="${id}"]`,
+          );
+          const operations = board?.querySelector("[data-rd-device-operations]");
+          return document.querySelector(".forma-canvas-viewport")?.dataset.canvasZoomTier ===
+              "editing" &&
+            !document.querySelector(".is-camera-animating") &&
+            operations?.hidden === false && operations?.inert === false &&
+            operations.contains(document.activeElement);
+        },
+        G915_SLUG,
       );
       assert.equal(
         await item.locator("[data-rd-keyboard-surface]").count(),
         1,
         "provider failure preserves the keyboard-shaped board",
+      );
+      const unavailableSurface = item.locator("[data-rd-keyboard-surface]");
+      assert.equal(
+        await unavailableSurface.evaluate((surface) => surface.inert),
+        true,
+        "provider failure keeps native key actions inert even at editing distance",
+      );
+      assert.equal(await unavailableSurface.getAttribute("aria-hidden"), "true");
+      const unavailableKeyAccess = await unavailableSurface.evaluate((surface) => {
+        const keys = Array.from(
+          surface.querySelectorAll('button.n-key:not(.ghost)[data-key]:not([data-key=""])'),
+        );
+        const isBlocked = (key) => key.disabled || Boolean(key.closest("[inert]"));
+        return {
+          count: keys.length,
+          actionable: keys.filter((key) => !isBlocked(key)).length,
+          tabbable: keys.filter((key) => key.tabIndex >= 0 && !isBlocked(key)).length,
+        };
+      });
+      assert.ok(unavailableKeyAccess.count > 0, "the keyboard drawing keeps its native keys");
+      assert.equal(unavailableKeyAccess.actionable, 0);
+      assert.equal(unavailableKeyAccess.tabbable, 0);
+      const operations = item.locator("[data-rd-device-operations]");
+      assert.equal(await operations.isVisible(), true);
+      assert.equal(await operations.evaluate((node) => node.inert), false);
+      assert.equal(await operations.getAttribute("aria-hidden"), null);
+      assert.equal(
+        await operations.locator('[data-nx="rd-shared-policy"]').isDisabled(),
+        true,
+        "the staging-owned policy pauses only while staging itself is unavailable",
+      );
+      assert.match(
+        (await operations.locator("[data-rd-device-capture] summary").textContent()) ?? "",
+        /Windows input/i,
+        "exact-device capture truth remains readable while mapping is unavailable",
+      );
+      const releaseCapture = operations.locator("[data-rd-device-capture]");
+      assert.match(
+        (await releaseCapture.locator(":scope > summary").getAttribute("aria-label")) ?? "",
+        /Windows input for Logitech G915 TKL/i,
+        "the board-local capture summary names its exact device",
+      );
+      assert.match(
+        (await releaseCapture.locator('button[type="submit"]').getAttribute("aria-label")) ?? "",
+        /Release.*Logitech G915 TKL/i,
+        "the release action keeps its visible verb and exact device name",
+      );
+      assert.match(
+        (await item.locator("[data-rd-keyboard-mapping-status]").textContent()) ?? "",
+        /staging unavailable|draft service.*did not answer|Studio reconnects/i,
+        "the board names the provider outage instead of telling the user to add it again",
       );
       await page.keyboard.press("Escape");
 
@@ -4217,6 +4742,13 @@ describe("the device workbench", () => {
             .scanAuthoritative === "false",
         G915_SLUG,
         { timeout: 10_000 },
+      );
+      await page.waitForFunction(
+        (id) =>
+          document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
+            .connectionKnown === "false",
+        G915_SLUG,
+        { timeout: 5_000 },
       );
       assert.equal(await item.count(), 1, "a refused scan is unknown, not an empty machine");
       assert.match(
@@ -4241,6 +4773,27 @@ describe("the device workbench", () => {
         ).count(),
         1,
         "session-wide source policy remains global while connection truth is unknown",
+      );
+      assert.equal(
+        await operations.locator('[data-nx="rd-shared-policy"]').isEnabled(),
+        true,
+        "a device-scan refusal does not disable the reachable staging-owned policy",
+      );
+      const unavailableCapture = operations.locator("[data-rd-device-capture]");
+      assert.equal(await unavailableCapture.getAttribute("data-capture-mode"), "unavailable");
+      assert.match(
+        (await unavailableCapture.locator(":scope > summary").textContent()) ?? "",
+        /Windows input.*Status unavailable.*Check connection/i,
+        "a retained board replaces stale Prepared / Release truth after authority is lost",
+      );
+      assert.match(
+        (await unavailableCapture.locator(":scope > summary").getAttribute("aria-label")) ?? "",
+        /Windows input for Logitech G915 TKL: status unavailable/i,
+      );
+      assert.equal(
+        await unavailableCapture.locator('form[data-rd-form^="capture-"]').count(),
+        0,
+        "losing exact-device authority removes the old consent and action form",
       );
       const beforeRemoval = await item.evaluate((node) => ({
         x: Number(node.dataset.canvasX),
@@ -4300,6 +4853,70 @@ describe("the device workbench", () => {
     }
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await closePage(page);
+  });
+
+  test("a cold scan outage exposes the staging policy recovery door in Profile", async () => {
+    const recoveryContext = await browser.newContext({
+      viewport: { width: 900, height: 760 },
+      colorScheme: "dark",
+    });
+    const page = await recoveryContext.newPage();
+    const noise = [];
+    page.on("pageerror", (error) => noise.push(`pageerror: ${error.stack ?? error}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") noise.push(`console: ${message.text()}`);
+    });
+    await page.route("**/api/redesign*", async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      assert.ok(
+        payload.controllers?.pads?.some((pad) => (pad.sources ?? []).length > 0),
+        "the fixture must carry a staging-owned source independent of discovery",
+      );
+      payload.devices.scan_authoritative = false;
+      payload.devices.usb_scan_authoritative = false;
+      payload.devices.bluetooth_scan_authoritative = false;
+      payload.devices.scan_line = "Device scan unavailable — try again.";
+      payload.devices.staging_reachable = true;
+      for (const tier of ["keyboards", "encoders", "experimental", "other"]) {
+        payload.devices[tier] = [];
+      }
+      await route.fulfill({ response, json: payload });
+    });
+    try {
+      await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      assert.equal(await page.locator(".rd-dev-node").count(), 0);
+      const fallback = page.locator("[data-rd-profile-policy-fallback]");
+      await page.waitForFunction(
+        () => document.querySelector("[data-rd-profile-policy-fallback]")?.hidden === false,
+      );
+      await page.locator("[data-rd-profile-menu] > summary").click();
+      await fallback.waitFor({ state: "visible" });
+      const opener = fallback.locator('[data-nx="rd-shared-policy"]');
+      assert.equal(await opener.isEnabled(), true);
+      await opener.click();
+      const editor = page.locator("#rd-shared-policy-editor[open]");
+      await editor.waitFor({ state: "visible" });
+      assert.equal(
+        await editor.evaluate((node) =>
+          Boolean(node.closest("[data-rd-profile-policy-fallback]"))
+        ),
+        true,
+      );
+      assert.equal(await editor.locator("form button").count(), 3);
+      await editor.locator('[data-nx="rd-shared-policy-close"]').click();
+      await editor.waitFor({ state: "hidden" });
+      assert.equal(await opener.evaluate((button) => document.activeElement === button), true);
+      assert.deepEqual(noise, []);
+    } finally {
+      await page.unrouteAll({ behavior: "wait" });
+      await closeContext(recoveryContext);
+    }
   });
 
   test("one dynamic encoder profile lab renders only what its evidence justifies", async () => {

@@ -50,6 +50,12 @@ const WORKBENCH_TOOLS: readonly WorkbenchToolLink[] = [
     title: "Device maintenance",
     detail: "Manage saved devices, claims and certificates.",
   },
+  {
+    href: "ms-settings:gaming-gamebar",
+    icon: "⊞",
+    title: "Windows capture recovery",
+    detail: "Open Game Bar settings if Windows still owns a captured shortcut.",
+  },
 ];
 
 /**
@@ -242,7 +248,7 @@ export function closeRedesignToolsDisclosure(root: HTMLElement, restoreFocus = f
       root.querySelectorAll<HTMLElement>("[data-rd-tools-menu] > summary"),
     );
     const target = summaries.find(isRendered) ??
-      Array.from(root.querySelectorAll<HTMLElement>(".rd-setup-sum")).find(isRendered);
+      Array.from(root.querySelectorAll<HTMLElement>(".rd-profile-sum")).find(isRendered);
     target?.focus({ preventScroll: true });
   }
   return true;
@@ -317,10 +323,12 @@ export function wireRedesignToolsDisclosures(root: HTMLElement): void {
     // first style read. Choosing by the authoritative breakpoint prevents
     // focus from remaining on a disclosure that is about to become hidden.
     const target = event.matches
-      ? root.querySelector<HTMLElement>(".rd-setupd > .rd-setup-sum")
+      ? root.querySelector<HTMLElement>(
+          ".rd-utility-compact-home [data-rd-tools-menu] > .rd-utility-sum",
+        )
       : root.querySelector<HTMLElement>(
-        ".rd-utility-rail-home [data-rd-tools-menu] > .rd-utility-sum",
-      );
+          ".rd-utility-rail-home [data-rd-tools-menu] > .rd-utility-sum",
+        );
     target?.focus({ preventScroll: true });
   });
 }

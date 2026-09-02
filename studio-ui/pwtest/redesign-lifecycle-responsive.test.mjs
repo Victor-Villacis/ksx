@@ -116,7 +116,7 @@ async function openRunningDirtyBench() {
     { timeout: 20_000 },
   );
   await page.waitForFunction(
-    () => /edited|Unsaved/i.test(document.querySelector(".rd-draft-label")?.textContent ?? ""),
+    () => /edited|Unsaved/i.test(document.querySelector(".rd-profile-state")?.textContent ?? ""),
   );
   await page.locator('[data-nx="rd-insp-close"]').click();
   return page;
@@ -238,14 +238,7 @@ async function lockAdverseRailState(page) {
 }
 
 async function assertTopRailGeometry(page, width) {
-  const rail = await page.locator(".rd-top").evaluate((element) => ({
-    client: element.clientWidth,
-    scroll: element.scrollWidth,
-  }));
-  assert.ok(
-    rail.scroll <= rail.client,
-    `${width}px top rail overflows its clipped frame: ${JSON.stringify(rail)}`,
-  );
+  assertBoxInsideViewport(await page.locator(".rd-top").boundingBox(), width, "Top rail");
 
   const controls = await page
     .locator(".rd-top button, .rd-top summary")
@@ -443,35 +436,36 @@ async function assertLifecycleRail(page, width) {
       `${width}px brand wrapped onto another line: ${JSON.stringify(brandLines)}`,
     );
   }
+  assert.equal(await page.locator(".rd-setupd").count(), 0, `${width}px restored the removed Setup UI`);
+  const profile = page.locator(".rd-profile-sum");
+  assert.equal(await profile.isVisible(), true, `${width}px Profile trigger is hidden`);
+  assert.match(
+    await profile.ariaSnapshot(),
+    /profile.*(?:edited|Unsaved).*(?:playing|running)/i,
+    `${width}px Profile accessible tree lost draft or session status`,
+  );
+  assert.match(await profile.getAttribute("title"), /(?:edited|Unsaved).*(?:playing|running)/i);
+  assert.match(await profile.locator(".rd-profile-state").textContent(), /edited|Unsaved/i);
+  assert.match(await profile.locator(".rd-profile-session").textContent(), /playing/i);
+  assert.equal(await profile.locator(".rd-profile-icon").isVisible(), true);
   if (width <= 440) {
-    const setupVisual = await page.locator(".rd-setup-sum").evaluate((element) => {
-      const after = getComputedStyle(element, "::after");
-      return {
-        childOpacity: Array.from(element.children).map((child) => getComputedStyle(child).opacity),
-        content: after.content,
-        color: after.color,
-        text: element.textContent?.trim() ?? "",
-        title: element.getAttribute("title") ?? "",
-      };
+    const profileBox = await profile.boundingBox();
+    assert.ok(profileBox && profileBox.width >= 36, `${width}px Profile icon lost its target`);
+    const wordBox = await profile.locator(".rd-profile-word").boundingBox();
+    assert.ok(wordBox && wordBox.width <= 1.5, `${width}px Profile word was not visually clipped`);
+  } else {
+    const wordBox = await profile.locator(".rd-profile-word").boundingBox();
+    assert.ok(wordBox && wordBox.width > 1.5, `${width}px Profile word lost its visible label`);
+  }
+  for (const selector of [".rd-profile-state", ".rd-profile-session"]) {
+    const visual = await profile.locator(selector).evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { clipPath: style.clipPath, position: style.position };
     });
-    assert.ok(
-      setupVisual.childOpacity.every((opacity) => opacity === "0"),
-      `${width}px icon Setup leaked clipped progress text: ${JSON.stringify(setupVisual)}`,
-    );
-    assert.match(setupVisual.content, /◆/, `${width}px icon Setup lost its visible mark`);
-    assert.notEqual(setupVisual.color, "rgba(0, 0, 0, 0)");
-    assert.match(setupVisual.text, /complete/i, `${width}px icon Setup lost its accessible progress`);
-    assert.match(setupVisual.title, /setup progress/i, `${width}px icon Setup lost its tooltip`);
-  } else if (width <= COMPACT_PRIMARY_MAX) {
-    const setupChildren = await page.locator(".rd-setup-sum").evaluate((element) =>
-      Array.from(element.children)
-        .filter((child) => child.checkVisibility())
-        .map((child) => ({ text: child.textContent?.trim() ?? "", opacity: getComputedStyle(child).opacity })),
-    );
-    assert.ok(setupChildren.length > 0, `${width}px Setup lost its visible progress text`);
-    assert.ok(
-      setupChildren.every((child) => child.opacity === "1"),
-      `${width}px Setup progress became transparent: ${JSON.stringify(setupChildren)}`,
+    assert.equal(
+      visual.position === "absolute" && visual.clipPath !== "none",
+      width <= 900,
+      `${width}px ${selector} is in the wrong visual tier`,
     );
   }
 
@@ -486,9 +480,9 @@ async function assertLifecycleRail(page, width) {
     `${width}px workbench rendered duplicate Theme controls`,
   );
   assert.equal(
-    await page.locator(".rd-setupd [data-rd-theme-menu]").count(),
+    await page.locator(".rd-profiled [data-rd-theme-menu]").count(),
     0,
-    `${width}px Setup incorrectly owns the Theme picker`,
+    `${width}px Profile incorrectly owns the Theme picker`,
   );
   assert.equal(
     await page.locator(".rd-utility-rail-home [data-rd-tools-menu]").isVisible(),
@@ -716,16 +710,11 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
     for (const width of [390, 681, 1280, 1440]) {
       const page = await openSurface("/redesign?slot=1", { width, height: 900 });
       try {
-        let tools;
-        if (width < RAIL_PREFERENCES_MIN) {
-          const setup = page.locator(".rd-setupd");
-          await setup.locator(":scope > .rd-setup-sum").focus();
-          await page.keyboard.press("Enter");
-          await page.waitForFunction(() => document.querySelector(".rd-setupd")?.hasAttribute("open"));
-          tools = page.locator(".rd-utility-compact-home [data-rd-tools-menu]");
-        } else {
-          tools = page.locator(".rd-utility-rail-home [data-rd-tools-menu]");
-        }
+        const tools = page.locator(
+          width < RAIL_PREFERENCES_MIN
+            ? ".rd-utility-compact-home [data-rd-tools-menu]"
+            : ".rd-utility-rail-home [data-rd-tools-menu]",
+        );
 
         const summary = tools.locator(":scope > .rd-utility-sum");
         assert.equal(await tools.isVisible(), true, `Tools is hidden at ${width}px`);
@@ -744,7 +733,7 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
         assert.deepEqual(
           await tools.locator(".rd-utility-link[href]").evaluateAll((links) =>
             links.map((link) => link.getAttribute("href"))),
-          ["/check", "/pads", "/devices"],
+          ["/check", "/pads", "/devices", "ms-settings:gaming-gamebar"],
           `${width}px Tools menu lost an operational route`,
         );
         assert.deepEqual(
@@ -778,16 +767,11 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
       const page = await openSurface("/redesign?slot=1", { width, height: 900 });
       try {
         const openTools = async () => {
-          let tools;
-          if (width < RAIL_PREFERENCES_MIN) {
-            const setup = page.locator(".rd-setupd");
-            if (await setup.getAttribute("open") === null) {
-              await setup.locator(":scope > .rd-setup-sum").click();
-            }
-            tools = page.locator(".rd-utility-compact-home [data-rd-tools-menu]");
-          } else {
-            tools = page.locator(".rd-utility-rail-home [data-rd-tools-menu]");
-          }
+          const tools = page.locator(
+            width < RAIL_PREFERENCES_MIN
+              ? ".rd-utility-compact-home [data-rd-tools-menu]"
+              : ".rd-utility-rail-home [data-rd-tools-menu]",
+          );
           const summary = tools.locator(":scope > .rd-utility-sum");
           if (await tools.getAttribute("open") === null) await summary.click();
           await page.waitForFunction(
@@ -848,7 +832,6 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
     });
     try {
       await page.goto(`${BASE}/redesign?slot=1`, { waitUntil: "domcontentloaded" });
-      await page.locator(".rd-setupd > .rd-setup-sum").click();
       const tools = page.locator(".rd-utility-compact-home [data-rd-tools-menu]");
       await tools.locator(":scope > .rd-utility-sum").click();
       assert.equal(await tools.locator(".rd-utility-action").count(), 3);
@@ -856,7 +839,7 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
       assert.deepEqual(
         await tools.locator(".rd-utility-link[href]:visible").evaluateAll((links) =>
           links.map((link) => link.getAttribute("href"))),
-        ["/check", "/pads", "/devices"],
+        ["/check", "/pads", "/devices", "ms-settings:gaming-gamebar"],
       );
     } finally {
       await page.close();
@@ -879,17 +862,14 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
       await page.waitForFunction(
         () => document.querySelectorAll("[data-rd-tools-menu][open]").length === 0,
       );
-      const setupSummary = page.locator(".rd-setupd > .rd-setup-sum");
-      assert.equal(
-        await setupSummary.evaluate((element) => document.activeElement === element),
-        true,
-        "the hidden desktop Tools summary retained focus after compacting",
-      );
-
-      await page.keyboard.press("Enter");
       const compact = page.locator(".rd-utility-compact-home [data-rd-tools-menu]");
       const compactSummary = compact.locator(":scope > .rd-utility-sum");
-      await compactSummary.focus();
+      assert.equal(
+        await compactSummary.evaluate((element) => document.activeElement === element),
+        true,
+        "focus did not hand off from desktop Tools to compact Tools",
+      );
+
       await page.keyboard.press("Enter");
       assert.notEqual(await compact.getAttribute("open"), null);
       assert.equal(
@@ -913,11 +893,10 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
       // handoff even when no disclosure content was open.
       await page.setViewportSize({ width: RAIL_PREFERENCES_MIN - 1, height: 900 });
       await page.waitForFunction(
-        () => document.activeElement?.matches(".rd-setupd > .rd-setup-sum"),
+        () => document.activeElement?.matches(
+          ".rd-utility-compact-home [data-rd-tools-menu] > .rd-utility-sum",
+        ),
       );
-      const setup = page.locator(".rd-setupd");
-      if (await setup.getAttribute("open") === null) await page.keyboard.press("Enter");
-      await compactSummary.focus();
       assert.equal(await compact.getAttribute("open"), null);
       await page.setViewportSize({ width: RAIL_PREFERENCES_MIN, height: 900 });
       await page.waitForFunction(
@@ -1012,7 +991,6 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
       { hasTouch: true },
     );
     try {
-      await page.locator(".rd-setupd > .rd-setup-sum").click();
       const tools = page.locator(".rd-utility-compact-home [data-rd-tools-menu]");
       const summary = tools.locator(":scope > .rd-utility-sum");
       const box = await summary.boundingBox();

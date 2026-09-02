@@ -335,9 +335,11 @@ describe("redesign cutover utility contracts", () => {
 
   test("Rescan requests an uncached read and support remedies stay visible", async () => {
     const { page } = await openWorkbench();
+    await page.locator(".rd-profile-sum").click();
     assert.match(await page.locator(".rd-buildmeta").textContent(), /^v\d/);
-    await page.locator(".rd-setup-sum").click();
-    await page.waitForSelector('a[href="ms-settings:gaming-gamebar"]');
+    const tools = page.locator(".rd-utility-rail-home [data-rd-tools-menu]");
+    await tools.locator(":scope > summary").click();
+    await tools.locator('a[href="ms-settings:gaming-gamebar"]').waitFor({ state: "visible" });
     const requests = [];
     page.on("request", (request) => {
       if (request.url().includes("/api/redesign")) requests.push(request.url());

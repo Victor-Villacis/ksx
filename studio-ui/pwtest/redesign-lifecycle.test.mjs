@@ -105,17 +105,35 @@ async function clickAction(page, kind) {
   await assert.doesNotReject(() => button.click());
 }
 
-async function openSetup(page) {
-  const details = page.locator(".rd-setupd");
+async function openProfile(page) {
+  const details = page.locator(".rd-profiled");
   if (!(await details.evaluate((element) => element.open))) {
-    await page.locator(".rd-setup-sum").click();
+    await page.locator(".rd-profile-sum").click();
   }
+}
+
+async function openCaptureForm(page, kind) {
+  const review = page.locator('[data-rd-attention]:visible [data-nx="rd-review-recovery"]');
+  if (await review.count()) {
+    await review.click();
+  }
+  const details = page.locator(
+    `.rd-device-capture:has([data-rd-form="${kind}"])`,
+  ).first();
+  await details.waitFor({ state: "attached" });
+  if (!(await details.evaluate((element) => element.open))) {
+    await details.locator(":scope > summary").click();
+  }
+  const form = details.locator(`[data-rd-form="${kind}"]`);
+  await form.waitFor({ state: "visible" });
+  return form;
 }
 
 async function openControllerInspector(page, slot = 1) {
   const card = page.locator(`.forma-canvas-stage > [data-instance-id="ctrl-slot-${slot}"]`);
   await card.waitFor({ state: "visible" });
-  await card.locator(".rd-ctrlcard-name").click();
+  await page.locator(`.navigator-item[data-instance-id="ctrl-slot-${slot}"]`)
+    .evaluate((button) => button.click());
   await page.locator('[data-rd-form="controller-socd"]').waitFor({ state: "visible" });
 }
 
@@ -141,7 +159,26 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
       { timeout: 20_000 },
     );
     assert.match(await page.locator("[data-rd-live-stats]").textContent(), /^Live/);
-    assert.match(await page.locator(".rd-setup-compact").textContent(), /playing/i);
+    assert.equal(await page.locator(".rd-setupd").count(), 0);
+    assert.equal(await page.locator(".rd-top > .rd-profiled").isVisible(), true);
+    assert.equal(
+      await page.locator('.rd-run-actions [data-rd-form="save"] button').isVisible(),
+      true,
+      "Save remains a direct header action",
+    );
+    assert.match(await page.locator(".rd-profile-session").textContent(), /playing/i);
+
+    // A mixed keyboard/pointer dismissal cannot strand focus inside the now
+    // collapsed Profile disclosure when the outside target is only chrome.
+    await openProfile(page);
+    await page.locator(".rd-start-over > summary").focus();
+    await page.locator(".rd-brand").click();
+    assert.equal(await page.locator(".rd-profiled").evaluate((details) => details.open), false);
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.classList.contains("rd-profile-sum")),
+      true,
+      "outside-click returns hidden Profile focus to its summary",
+    );
 
     // Stop is always its own escape verb. The scripted live feed must lose
     // its paint as soon as the served session says idle.
@@ -155,11 +192,17 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
     await page.waitForFunction(
       () => document.querySelector("[data-forma-island]")?.dataset.rdLiveState === "inactive",
     );
+    const blockedGuidance = page.locator(".rd-action-guidance");
+    assert.equal(await blockedGuidance.isVisible(), true);
+    assert.match(
+      (await blockedGuidance.textContent()) ?? "",
+      /(?:Save|Play).*(?:Prepare|input)/i,
+      "the header visibly explains how to unblock its native-disabled actions",
+    );
 
     // A stopped exact-device session deliberately fails closed until the
     // operator acknowledges the recovery path and prepares that same device.
-    await openSetup(page);
-    const prepare = page.locator('[data-rd-form="capture-prepare"]');
+    const prepare = await openCaptureForm(page, "capture-prepare");
     await prepare.locator('input[type="checkbox"]').evaluateAll((checks) => {
       checks.forEach((check) => check.click());
     });
@@ -172,16 +215,14 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
       { timeout: 20_000 },
     );
     assert.match(await page.locator(".rd-flash").textContent(), /prepared/i);
-    await page.locator(".rd-setup-sum").click();
-
-    const draftBeforePlay = (await page.locator(".rd-draft-label").textContent())?.trim();
+    const draftBeforePlay = (await page.locator(".rd-profile-state").textContent())?.trim();
     assert.match(draftBeforePlay ?? "", /Unsaved|Loaded|Saved setup/);
     await clickAction(page, "play");
     await page.waitForFunction(
       () => !document.querySelector('[data-rd-form="stop"]')?.classList.contains("none"),
     );
     assert.equal(
-      (await page.locator(".rd-draft-label").textContent())?.trim(),
+      (await page.locator(".rd-profile-state").textContent())?.trim(),
       draftBeforePlay,
       "Play must not silently save the draft",
     );
@@ -208,7 +249,7 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
       null,
       { timeout: 20_000 },
     );
-    const dirtyBeforeApply = (await page.locator(".rd-draft-label").textContent())?.trim();
+    const dirtyBeforeApply = (await page.locator(".rd-profile-state").textContent())?.trim();
     assert.match(dirtyBeforeApply ?? "", /edited|Unsaved/i);
     await clickAction(page, "apply");
     await page.waitForFunction(
@@ -218,7 +259,7 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
     );
     assert.match(await page.locator(".rd-flash").textContent(), /updated in place/i);
     assert.equal(
-      (await page.locator(".rd-draft-label").textContent())?.trim(),
+      (await page.locator(".rd-profile-state").textContent())?.trim(),
       dirtyBeforeApply,
       "Apply must not silently save the draft",
     );
@@ -247,6 +288,15 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
       () => document.querySelector(".rd-flash")?.textContent?.includes("Setup saved"),
     );
     assert.match(await page.locator(".rd-flash").textContent(), /Setup saved/i);
+    // The action flash is painted as soon as the POST answers; the
+    // authoritative payload refresh and whole-island unlock settle next.
+    // Judge Apply only after that transaction boundary, not in the narrow
+    // interval where the mutation lock correctly keeps every action disabled.
+    await page.waitForFunction(
+      () => document.querySelector("[data-forma-island]")?.dataset.rdMutationPending !== "true",
+      null,
+      { timeout: 20_000 },
+    );
     assert.equal(await applyButtonIsReady(page), true);
 
     const savedSocd = await socdSelect.inputValue();
@@ -257,9 +307,9 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
     await socdSelect.selectOption(changedSocd);
     await socd.locator('button[type="submit"]').click();
     await page.waitForFunction(
-      () => /edited|Unsaved/i.test(document.querySelector(".rd-draft-label")?.textContent ?? ""),
+      () => /edited|Unsaved/i.test(document.querySelector(".rd-profile-state")?.textContent ?? ""),
     );
-    const dirtyBeforeReplace = (await page.locator(".rd-draft-label").textContent())?.trim();
+    const dirtyBeforeReplace = (await page.locator(".rd-profile-state").textContent())?.trim();
 
     const applyButton = page.locator('[data-rd-form="apply"] button');
 
@@ -376,7 +426,7 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
       { timeout: 20_000 },
     );
     assert.equal(
-      (await page.locator(".rd-draft-label").textContent())?.trim(),
+      (await page.locator(".rd-profile-state").textContent())?.trim(),
       dirtyBeforeReplace,
       "Replace session must not silently save the draft",
     );
@@ -387,34 +437,36 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
     await page.click('[data-nx="rd-ctrls-open"]');
     await page.locator('.rd-ctrladd-form[data-usable="true"] button').first().click();
     await page.click('.rd-ctrlmodal-head button[data-nx="rd-ctrls-close"]');
-    await openSetup(page);
-    const startOver = page.locator(".rd-start-over");
+    await openProfile(page);
+    const startOver = page.locator(".rd-profiled .rd-start-over");
     await startOver.locator("summary").click();
     const confirmation = startOver.locator('input[name="confirm_discard"]');
     assert.equal(await confirmation.isVisible(), true);
     await confirmation.check();
     await startOver.locator('button[type="submit"]').click();
     await page.waitForFunction(
-      () => document.querySelector(".rd-draft-label")?.textContent?.includes("New draft"),
+      () => document.querySelector(".rd-profile-state")?.textContent?.includes("New draft"),
     );
     assert.match(await page.locator(".rd-flash").textContent(), /Draft discarded/);
 
-    const adopt = page.locator('[data-rd-form="adopt"] button');
+    await openProfile(page);
+    const adopt = page.locator('.rd-profiled [data-rd-form="adopt"] button');
     assert.equal(await adopt.isEnabled(), true);
     await adopt.click();
     await page.waitForFunction(
-      () => !document.querySelector(".rd-draft-label")?.textContent?.includes("New draft"),
+      () => !document.querySelector(".rd-profile-state")?.textContent?.includes("New draft"),
     );
     assert.match(await page.locator(".rd-flash").textContent(), /loaded into this draft/i);
 
     // Recovery remains reachable independently of the draft. Releasing the
     // exact held device returns it to ordinary typing and re-arms preparation.
-    await openSetup(page);
-    const release = page.locator('[data-rd-form="capture-release"]').first();
+    const release = await openCaptureForm(page, "capture-release");
     await release.locator('input[name="confirm_release"]').check();
     await release.locator('button[type="submit"]').click();
     await page.waitForFunction(
-      () => !document.querySelector('[data-rd-form="capture-prepare"]')?.classList.contains("none"),
+      () => Boolean(document.querySelector(
+        '.rd-device-capture [data-rd-form="capture-prepare"]',
+      )),
       null,
       { timeout: 20_000 },
     );
@@ -422,9 +474,14 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
 
     // Polling can advance hidden draft identities. Checked destructive
     // consent must be revoked before the newly served authority can be used.
-    await openSetup(page);
+    await openProfile(page);
     await startOver.locator("summary").click();
     await confirmation.check();
+    assert.equal(
+      await confirmation.evaluate((input) => input === document.activeElement),
+      true,
+      "the consent owns focus before another client invalidates its draft authority",
+    );
     const peerSocdAgain = authorityPeer.locator('[data-rd-form="controller-socd"]');
     const peerSelectAgain = peerSocdAgain.locator('select[name="socd"]');
     const peerCurrentAgain = await peerSelectAgain.inputValue();
@@ -441,6 +498,18 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
       },
       null,
       { timeout: 10_000 },
+    );
+    await page.waitForFunction(
+      () => document.activeElement?.matches(
+        ".rd-start-over > summary, .rd-profile-sum",
+      ),
+      null,
+      { timeout: 10_000 },
+    );
+    assert.match(
+      (await page.locator(".n-live-sr:not([data-rd-encoder-status])").textContent()) ?? "",
+      /draft changed elsewhere.*Start over confirmation was cleared/i,
+      "the invalidated destructive consent is announced",
     );
     // Adding and removing another full keyboard is now one picker transaction;
     // it does not reuse the removed singleton input-source card flow.

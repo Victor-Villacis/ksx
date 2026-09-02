@@ -433,7 +433,7 @@ describe("the redesign theme menu", () => {
     await again.close();
   });
 
-  test("scripting off: native setup state and query survive beyond the old refresh timer", async () => {
+  test("scripting off: native profile and capture state survive beyond the old refresh timer", async () => {
     const page = await browser.newPage({
       viewport: { width: 1600, height: 1000 },
       colorScheme: "light",
@@ -441,18 +441,20 @@ describe("the redesign theme menu", () => {
     });
     const route = "/redesign?slot=1&q=face%20buttons";
     await page.goto(`${BASE}${route}`, { waitUntil: "domcontentloaded" });
-    await page.click(".rd-setupd > summary");
+    await page.click(".rd-profiled > summary");
     const consent = page.locator(
-      'form[action="/redesign/capture/prepare"] input[name="confirm_spare_keyboard"]',
+      '.rd-capture-native form[action="/redesign/capture/prepare"] ' +
+        'input[name="confirm_spare_keyboard"]',
     );
     await consent.check();
 
     // The removed fallback timer fired at five seconds and navigated to bare
-    // /redesign, collapsing Setup and clearing every confirmation. Wait past
+    // /redesign, collapsing native disclosures and clearing every confirmation. Wait past
     // that boundary so all three assertions prove the real browser behavior.
     await page.waitForTimeout(5_500);
     assert.equal(new URL(page.url()).pathname + new URL(page.url()).search, route);
-    assert.equal(await page.locator(".rd-setupd[open]").count(), 1, "Setup stays open");
+    assert.equal(await page.locator(".rd-profiled[open]").count(), 1, "Profile stays open");
+    assert.equal(await page.locator(".rd-setupd").count(), 0, "removed Setup stays absent");
     assert.equal(await consent.isChecked(), true, "required consent stays checked");
     await page.close();
   });

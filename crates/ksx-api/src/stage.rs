@@ -319,7 +319,7 @@ const fn default_true() -> bool {
 pub struct BlockingOption {
     /// `whole` | `bound-keys` | `off` — what a [`StageEdit`] sends back.
     pub name: String,
-    /// The question in the user's words: "Freeze mapped keyboards".
+    /// The question in the user's words: "Freeze mapped inputs".
     pub title: String,
     /// What it means for them, not for the config file.
     pub detail: String,
@@ -333,15 +333,15 @@ pub struct BlockingOption {
 /// thread flips its OWN passthrough, which is why no UI can break it), not a
 /// reassurance a surface is free to word.
 pub const ESCAPE_HATCH_LINE: &str =
-    "LeftCtrl five times always toggles keyboard capture off or on — in both modes. Turning it off \
-     gives every keyboard back without ending Play. It is handled in the capture thread itself, so \
+    "LeftCtrl five times always toggles routed-input capture off or on in either blocking mode. \
+     Pass through already leaves Windows input untouched. Turning capture off gives every routed input \
+     back to Windows without ending Play. It is handled in the capture thread itself, so \
      no screen, no browser and no crashed UI can take it away; Stop or Ctrl+Alt+Del ends Play.";
 
 /// **Freezing is session-scoped and route-scoped.** §3's second must-say.
 pub const BLOCKING_SCOPE_LINE: &str =
-    "This applies to every keyboard routed into this draft, for this session only. Keyboards that \
-     are not mapping sources are never captured. Stopping the session gives every routed keyboard \
-     back.";
+    "This applies to every input routed into this draft, for this session only. Inputs that are not \
+     mapping sources are never captured. Stopping the session gives every routed input back to Windows.";
 
 /// One SOCD policy, in the words a player would use.
 ///
@@ -407,32 +407,32 @@ impl SocdOption {
 }
 
 impl BlockingOption {
-    /// The two answers §3 asks about, plus the third the setting has always
-    /// had. The wording lives HERE, once, so the browser and the cabinet cannot
+    /// The three answers §3 asks about. The wording lives HERE, once, so the
+    /// browser and the cabinet cannot
     /// describe the same choice differently.
     pub fn roster() -> Vec<Self> {
         vec![
             Self {
                 name: Blocking::Whole.as_str().to_owned(),
-                title: "Freeze mapped keyboards".to_owned(),
-                detail: "Every keystroke on each routed keyboard is reserved for ksx. Mapped keys \
-                         drive its controller routes; unmapped keys do not type into Windows. This \
-                         is best for dedicated panels."
+                title: "Freeze mapped inputs".to_owned(),
+                detail: "Every key signal from each routed input is reserved for ksx. Mapped signals \
+                         drive its controller routes; unused signals do not reach Windows. This is \
+                         best for dedicated panels and keyboards."
                     .to_owned(),
             },
             Self {
                 name: Blocking::BoundKeys.as_str().to_owned(),
-                title: "Split mapped keyboards".to_owned(),
+                title: "Split mapped inputs".to_owned(),
                 detail:
-                    "On every routed keyboard, mapped keys drive controllers while everything \
-                         else still types. Each physical keyboard keeps its own independent routes."
+                    "On every routed input, mapped key signals drive controllers while everything \
+                         else still reaches Windows. Each physical input keeps its own independent routes."
                         .to_owned(),
             },
             Self {
                 name: Blocking::Off.as_str().to_owned(),
-                title: "Keep all keyboards typing".to_owned(),
-                detail: "Mapped keys drive controllers and continue typing into Windows. Nothing \
-                         is captured."
+                title: "Pass through to Windows".to_owned(),
+                detail: "Mapped key signals drive controllers and continue reaching Windows. Nothing \
+                         from a routed input is captured."
                     .to_owned(),
             },
         ]
@@ -3049,6 +3049,20 @@ pub fn device_selectors_equal(left: &str, right: &str) -> bool {
     }
 }
 
+/// Stable semantic text for maps and fingerprints keyed by one device.
+///
+/// This follows the same typed selector grammar as [`device_selectors_equal`]:
+/// structural USB spelling and legacy paths canonicalize, while an `sn=`
+/// value keeps its exact firmware-provided case. Invalid opaque input falls
+/// back to its trimmed bytes so this helper never invents equivalence that the
+/// comparison helper would reject.
+pub fn device_selector_identity(selector: &str) -> String {
+    DeviceSelector::parse(selector.trim()).map_or_else(
+        |_| selector.trim().to_owned(),
+        |selector| selector.to_string(),
+    )
+}
+
 /// Whether one exact staged device owns any authored route whose removal
 /// needs explicit confirmation. Missing authoring is treated conservatively:
 /// an older daemon may have omitted the body, but the route still exists.
@@ -3517,17 +3531,18 @@ steps = [{{ hold = ["A"], ms = 25 }}]
         assert_eq!(view.blocking_scope, BLOCKING_SCOPE_LINE);
         assert!(view.escape_hatch.contains("LeftCtrl five times"));
         assert!(
-            view.escape_hatch.contains("both modes"),
+            view.escape_hatch.contains("either blocking mode"),
             "the hatch works under Freeze AND Split; a sentence that said it only \
              for one would be worse than none"
         );
         assert!(view.blocking_scope.contains("this session only"));
-        assert!(view.blocking_scope.contains("every keyboard routed"));
+        assert!(view.blocking_scope.contains("every input routed"));
         assert!(view
             .blocking_scope
             .contains("not mapping sources are never captured"));
-        assert_eq!(view.blocking_options[0].title, "Freeze mapped keyboards");
-        assert_eq!(view.blocking_options[1].title, "Split mapped keyboards");
+        assert_eq!(view.blocking_options[0].title, "Freeze mapped inputs");
+        assert_eq!(view.blocking_options[1].title, "Split mapped inputs");
+        assert_eq!(view.blocking_options[2].title, "Pass through to Windows");
         // A screen with no daemon still has to be able to say them — that
         // screen is exactly where somebody is reading about how to get out.
         let down = StagedSetupView::unreachable("no daemon answered");
@@ -4282,6 +4297,42 @@ steps = [{{ hold = ["A"], ms = 25 }}]
             !device_selectors_equal("usb:d209:0430:00:sn=BoardA", "usb:d209:0430:00:sn=boarda"),
             "firmware serial case is exact source identity"
         );
+    }
+
+    #[test]
+    fn device_selector_identity_canonicalizes_structure_without_folding_serials() {
+        assert_eq!(
+            device_selector_identity(" USB:D209:0430:00:PORT=7&abc "),
+            "usb:d209:0430:00:port=7&ABC"
+        );
+        assert_eq!(
+            device_selector_identity(r"usb\vid_d209&pid_0430&mi_00\7&abc"),
+            r"USB\VID_D209&PID_0430&MI_00\7&ABC"
+        );
+        assert_eq!(
+            device_selector_identity("USB:3434:0B10:00:SN=BoardA"),
+            "usb:3434:0b10:00:sn=BoardA"
+        );
+        assert_ne!(
+            device_selector_identity("usb:3434:0b10:00:sn=BoardA"),
+            device_selector_identity("usb:3434:0b10:00:sn=boarda")
+        );
+        assert_eq!(device_selector_identity("  opaque-id  "), "opaque-id");
+
+        for (left, right) in [
+            ("USB:D209:0430:00", "usb:d209:0430:00"),
+            (
+                r"USB\VID_D209&PID_0430&MI_00\7&ABC",
+                r"usb\vid_d209&pid_0430&mi_00\7&abc",
+            ),
+            (" opaque-id ", "opaque-id"),
+        ] {
+            assert!(device_selectors_equal(left, right));
+            assert_eq!(
+                device_selector_identity(left),
+                device_selector_identity(right)
+            );
+        }
     }
 
     #[test]

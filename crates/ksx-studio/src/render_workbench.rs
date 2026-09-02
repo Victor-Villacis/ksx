@@ -444,6 +444,10 @@ pub(crate) fn device_row(row: &NocturneDeviceRow) -> SlotValue {
             "connection_state".to_owned(),
             SlotValue::Text(row.connection_state.clone()),
         ),
+        (
+            "instance_id".to_owned(),
+            SlotValue::Text(row.instance_id.clone()),
+        ),
         ("selector".to_owned(), SlotValue::Text(row.selector.clone())),
         ("alias".to_owned(), SlotValue::Text(row.alias.clone())),
         ("label".to_owned(), SlotValue::Text(row.label.clone())),
@@ -467,6 +471,26 @@ pub(crate) fn device_row(row: &NocturneDeviceRow) -> SlotValue {
         (
             "capture_cls".to_owned(),
             SlotValue::Text(row.capture_cls.clone()),
+        ),
+        (
+            "capture_mode".to_owned(),
+            SlotValue::Text(row.capture_mode.clone()),
+        ),
+        (
+            "capture_detail".to_owned(),
+            SlotValue::Text(row.capture_detail.clone()),
+        ),
+        (
+            "capture_action_label".to_owned(),
+            SlotValue::Text(row.capture_action_label.clone()),
+        ),
+        (
+            "capture_can_prepare".to_owned(),
+            SlotValue::Bool(row.capture_can_prepare),
+        ),
+        (
+            "capture_can_release".to_owned(),
+            SlotValue::Bool(row.capture_can_release),
         ),
     ])
 }

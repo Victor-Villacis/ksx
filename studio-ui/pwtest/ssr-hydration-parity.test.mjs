@@ -197,6 +197,26 @@ const SNAPSHOT = `(() => {
   clone.querySelectorAll("[data-client-subtree]").forEach((el) => {
     el.replaceChildren();
   });
+  // 3g. PROFILE POLICY RECOVERY, by contract. Whether an exact device board
+  // mounts is browser-owned canvas membership, which SSR cannot read. The
+  // marked recovery door is therefore served hidden and client-reconciled;
+  // its marker and document position still compare, while its visibility and
+  // contents intentionally follow that local membership after adoption.
+  clone.querySelectorAll("[data-client-policy-fallback]").forEach((el) => {
+    el.removeAttribute("hidden");
+    el.removeAttribute("inert");
+    el.removeAttribute("aria-hidden");
+    el.replaceChildren();
+  });
+  // 3h. PROGRESSIVELY ENHANCED POLICY ROVING, by contract. Before JS, all
+  // three custom-radio POSTs need native tab stops because no arrow-key
+  // handler exists. The hydrated island establishes the ARIA radio group's
+  // one roving stop in its first post-adoption microtask. Only this named
+  // attribute differs; row identity, checked state, copy and every other
+  // accessible attribute remain part of the exact parity comparison.
+  clone.querySelectorAll("[data-client-roving-policy] [role=radio]").forEach((el) => {
+    el.removeAttribute("tabindex");
+  });
   let html = clone.outerHTML;
   // 4. forma-ir's U+200B placeholders, which hold the position of an empty
   //    dynamic text slot server-side.
@@ -244,6 +264,16 @@ async function ssrDom(url) {
       0,
       `${url} served the retired permanent keyboard canvas item`,
     );
+    if (new URL(url).pathname === "/redesign") {
+      const nativePolicyTabs = await page.locator(
+        '[data-client-roving-policy] [role="radio"]',
+      ).evaluateAll((radios) => radios.map((radio) => radio.getAttribute("tabindex")));
+      assert.deepEqual(
+        nativePolicyTabs,
+        ["0", "0", "0"],
+        `${url} must keep all three policy POSTs keyboard reachable without JavaScript`,
+      );
+    }
     await assertRouteVariant(page, url, "SSR");
     return await page.evaluate(SNAPSHOT);
   } finally {
@@ -296,11 +326,22 @@ async function hydratedDom(url) {
         devices: document.querySelectorAll(
           ".forma-canvas-stage > .rd-dev-node",
         ).length,
+        policyTabs: Array.from(document.querySelectorAll(
+          '[data-client-roving-policy] [role="radio"]',
+        )).map((radio) => radio.getAttribute("tabindex")),
       }));
-      assert.deepEqual(
-        keyboardContract,
-        { legacy: 0, devices: 0 },
-        `${url} did not preserve the empty-until-added device canvas contract`,
+      assert.equal(keyboardContract.legacy, 0, `${url} restored the retired keyboard item`);
+      assert.equal(keyboardContract.devices, 0, `${url} mounted a device before it was added`);
+      assert.equal(
+        keyboardContract.policyTabs.length,
+        3,
+        `${url} did not hydrate all three policy choices`,
+      );
+      assert.equal(
+        keyboardContract.policyTabs.filter((tab) => tab === "0").length,
+        1,
+        `${url} did not establish exactly one hydrated policy tab stop: ` +
+          JSON.stringify(keyboardContract.policyTabs),
       );
     }
     await assertRouteVariant(page, url, "hydrated");

@@ -284,10 +284,13 @@ try {
     // search, identity colors, Tidy and Rescan make it the largest surviving
     // entry. Independent keyboard boards, exact-source authoring, and the
     // many-to-many mapping graph, guarded device removal, and rollback-safe
-    // controller parking bring the measured pass to 299,274 Brotli bytes.
-    // Keep 1,226 bytes of headroom so this deliberate authority work cannot
-    // turn into an open-ended budget.
-    budgetThreshold: 300_500,
+    // controller parking, and fixed-size overview doors into device-local
+    // controls, guarded recovery focus, and the progressively-enhanced policy
+    // radiogroup and visible lifecycle guidance bring the measured pass to
+    // 305,264 Brotli bytes. Keep only 386
+    // bytes of headroom so this accessibility work cannot turn into an
+    // open-ended budget.
+    budgetThreshold: 305_650,
     ssr: true,
     ssrEntryPoints: {
       check: "src/check.ts",

@@ -138,11 +138,21 @@ async function clickAction(page, kind) {
   await button.click();
 }
 
-async function openSetup(page) {
-  const details = page.locator(".rd-setupd");
-  if (!(await details.evaluate((element) => element.open))) {
-    await page.locator(".rd-setup-sum").click();
+async function openCaptureForm(page, kind) {
+  const review = page.locator('[data-rd-attention]:visible [data-nx="rd-review-recovery"]');
+  if (await review.count()) {
+    await review.click();
   }
+  const details = page.locator(
+    `.rd-device-capture:has([data-rd-form="${kind}"])`,
+  ).first();
+  await details.waitFor({ state: "attached" });
+  if (!(await details.evaluate((element) => element.open))) {
+    await details.locator(":scope > summary").click();
+  }
+  const form = details.locator(`[data-rd-form="${kind}"]`);
+  await form.waitFor({ state: "visible" });
+  return form;
 }
 
 async function history(page) {
@@ -248,8 +258,7 @@ describe("redesign mutable live lifecycle", { concurrency: false }, () => {
     await page.waitForTimeout(4_500);
     assertInactive(await history(page));
 
-    await openSetup(page);
-    const prepare = page.locator('[data-rd-form="capture-prepare"]');
+    const prepare = await openCaptureForm(page, "capture-prepare");
     await prepare.locator('input[type="checkbox"]').evaluateAll((checks) => {
       checks.forEach((check) => check.click());
     });

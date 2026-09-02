@@ -94,26 +94,31 @@ Consequences that fall out, and are requirements:
 - What is staged is what plays. There is no second translation step where a
   saved file means something different from what the screen showed.
 
-## §3 Split or freeze — the question, in the user's words
+## §3 Freeze, split or pass through — the policy in the user's words
 
-Asked once, after mapping, before playing. Both answers already exist as
-`ksx_core::Blocking`; what is new is *asking*.
+Asked once for the draft, after at least one input is routed and before playing.
+The same session-wide policy is shown on every routed keyboard or encoder board;
+editing it from any board updates the one shared answer. All three answers already
+exist as `ksx_core::Blocking`:
 
-- **Freeze this keyboard** (`Blocking::Whole`) — every key on it drives the pad
-  and nothing else. No typos into the game, no accidental Windows shortcuts.
-  This is what most people want for a dedicated arcade panel.
-- **Split this keyboard** (`Blocking::BoundKeys`) — mapped keys drive the pad;
-  everything else still types. This is what lets one keyboard serve player 1 and
-  player 2, and what lets someone keep using their only keyboard.
+- **Freeze mapped inputs** (`Blocking::Whole`) — every signal from every routed
+  input is reserved for ksx. Mapped signals drive controllers; unused signals do
+  not reach Windows. This is the dedicated cabinet or panel choice.
+- **Split mapped inputs** (`Blocking::BoundKeys`) — mapped signals drive
+  controllers while everything else from each routed input still reaches Windows.
+  This is the everyday-keyboard choice.
+- **Pass through to Windows** (`Blocking::Off`) — mapped signals drive controllers
+  and also continue to Windows; ksx captures nothing from the routed inputs.
 
-Two things must be said on that screen, not buried:
+Two things must be said in the board-local policy editor, not buried:
 
-1. **The escape hatch is always live**: LeftCtrl five times toggles keyboard
-   capture off or on, in both modes, and is handled in the capture thread where
-   no UI can break it. Turning capture off gives every keyboard back without
-   ending Play; Stop or Ctrl+Alt+Del ends Play.
-2. Freeze is not permanent and not global. It applies to that keyboard, for that
-   session, and stopping the session ends it.
+1. **The escape hatch is always live**: LeftCtrl five times toggles capture off or
+   on in either blocking mode and is handled in the capture thread where no UI can
+   break it. Pass through already leaves Windows input untouched. Turning capture
+   off gives every routed input back to Windows without ending Play; Stop or
+   Ctrl+Alt+Del ends Play.
+2. The policy is session-scoped and route-scoped. It applies to every input routed
+   into this draft, never to unrelated devices, and stopping the session ends it.
 
 ## §4 What the installer must do (moment 2)
 
@@ -191,8 +196,8 @@ be opened).
   keyboard can be split but never WinUSB-claimed, and a device with no keyboard
   interface cannot be picked at all. `docs/DEVICE-IDENTITY.md` and the transport
   column carry this already.
-- **Looking and picking never prepare anything.** The top-level preparation
-  card is a separate POST with exact hidden stale-action guards and three
+- **Looking and picking never prepare anything.** The exact physical board's
+  Windows-input panel uses a separate POST with hidden stale-action guards and three
   visible required confirmations. The server re-enumerates the selected
   interface, refuses an unsupported, ambiguous, shared-HWID, stale, or
   last-keyboard target, and never accepts a backend name or helper command from
@@ -204,8 +209,8 @@ be opened).
   the shared package returns that twin to HidUsb when it is reconnected.
 - **Clean-install and shared-driver states differ honestly.** Without
   Interception, a claimable exact USB keyboard must be prepared before Save or
-  Play. When Interception is already installed and usable, the setup remains
-  ready and the capture card offers the built-in path as an optional extra —
+  Play. When Interception is already installed and usable, the draft remains
+  ready and that board's Windows-input panel offers the built-in path as an optional extra —
   its summary line reads *"Typing normally — the shared driver is ready;
   preparing the built-in path is optional."* A verified WinUSB device offers
   **Release selected keyboard**. Built-in preparation supports one
@@ -213,10 +218,10 @@ be opened).
   Rescan. Bluetooth keyboard capture is not available on a clean install.
 - **Say which keyboards ksx is already holding, and offer each one back —
   whatever is selected.** A board bound to `winusb.sys` does not type, and that
-  survives closing ksx, restarting the machine and starting Setup over: it is a
+  survives closing ksx, restarting the machine and starting the draft over: it is a
   Windows driver binding plus a machine-wide receipt, and neither of those is
-  this configuration. So the list is read from the DEVICE TREE and shown on its
-  own, above the steps — it appears with no config, with nothing staged, and
+  this configuration. So the recovery list is read from the DEVICE TREE and shown
+  independently of the active board — it appears with no config, with nothing staged, and
   while a different keyboard is selected. The exit from "my keyboard stopped
   working" must not require choosing that keyboard, or having chosen anything,
   or having a configuration at all. Release stays an explicit, separately
@@ -257,7 +262,7 @@ Each of these has already happened once in this project's history.
 - A staged mapper GET or accepted edit writes a file before Save, or a refused
   edit changes the staged setup.
 - An action that looked like a menu choice turns out to have prepared a board.
-  Preparation is always a distinct top-level card, never a side effect of
+  Preparation is always a distinct exact-board panel, never a side effect of
   choosing a row; it names the typing consequence, spare keyboard, UAC and
   certificate before requiring all three confirmations.
 - The browser selects a backend, supplies a helper/provider path, or turns an

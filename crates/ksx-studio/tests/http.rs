@@ -6641,10 +6641,6 @@ fn the_redesign_operational_shell_serves_truth_and_runs_the_shared_lifecycle() {
             .contains("Nothing is running"),
         "{before}"
     );
-    assert_eq!(
-        before["journey"]["compact"], "3/4 complete · Ready to play",
-        "{before}"
-    );
     assert_eq!(before["capture"]["mode"], "prepare-optional", "{before}");
 
     // Output support is Play's stricter gate only. A missing output must not
@@ -6761,10 +6757,6 @@ fn the_redesign_operational_shell_serves_truth_and_runs_the_shared_lifecycle() {
     assert_eq!(running["operations"]["stop"]["allowed"], true, "{running}");
     assert_eq!(running["operations"]["apply"]["visible"], true, "{running}");
     assert_eq!(running["operations"]["apply"]["allowed"], true, "{running}");
-    assert_eq!(
-        running["journey"]["compact"], "4/4 complete · Playing",
-        "{running}"
-    );
     let running_revision = running["operations"]["draft_revision"]
         .as_str()
         .expect("served running draft revision")
@@ -7111,6 +7103,25 @@ fn redesign_capture_prepares_and_releases_a_routed_secondary_device() {
     );
     assert_eq!(blocked["capture"]["instance"], IPAC_KB, "{blocked}");
     assert_eq!(blocked["operations"]["save"]["allowed"], false);
+    let blocked_panel = ["keyboards", "encoders", "experimental"]
+        .into_iter()
+        .flat_map(|tier| blocked["devices"][tier].as_array().into_iter().flatten())
+        .find(|row| row["selector"] == REDESIGN_LEFT_SOURCE)
+        .expect("routed secondary device row");
+    assert_eq!(blocked_panel["instance_id"], IPAC_KB, "{blocked_panel}");
+    assert_eq!(blocked_panel["capture_mode"], "prepare", "{blocked_panel}");
+    assert_eq!(
+        blocked_panel["capture_action_label"], "Prepare",
+        "{blocked_panel}"
+    );
+    assert_eq!(
+        blocked_panel["capture_can_prepare"], true,
+        "{blocked_panel}"
+    );
+    assert_eq!(
+        blocked_panel["capture_can_release"], false,
+        "{blocked_panel}"
+    );
 
     let prepared = post_form(addr, "/redesign/capture/prepare", PREPARE_IPAC_FORM);
     assert!(prepared.contains("Keyboard%20prepared"), "{prepared}");
@@ -7123,6 +7134,18 @@ fn redesign_capture_prepares_and_releases_a_routed_secondary_device() {
         serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("ready payload");
     assert_eq!(ready["capture"]["mode"], "release", "{ready}");
     assert_eq!(ready["capture"]["selector"], REDESIGN_LEFT_SOURCE);
+    let ready_panel = ["keyboards", "encoders", "experimental"]
+        .into_iter()
+        .flat_map(|tier| ready["devices"][tier].as_array().into_iter().flatten())
+        .find(|row| row["selector"] == REDESIGN_LEFT_SOURCE)
+        .expect("prepared secondary device row");
+    assert_eq!(ready_panel["capture_mode"], "release", "{ready_panel}");
+    assert_eq!(
+        ready_panel["capture_action_label"], "Release",
+        "{ready_panel}"
+    );
+    assert_eq!(ready_panel["capture_can_prepare"], false, "{ready_panel}");
+    assert_eq!(ready_panel["capture_can_release"], true, "{ready_panel}");
     assert_eq!(
         ready["operations"]["save"]["allowed"], true,
         "the absent unrouted primary is not a capture prerequisite: {ready}"
@@ -7135,6 +7158,41 @@ fn redesign_capture_prepares_and_releases_a_routed_secondary_device() {
     assert_eq!(
         after_release.devices[1].backend, "interception",
         "release restamps the exact routed secondary"
+    );
+    assert_eq!(machine.released_with.lock().unwrap().len(), 1);
+}
+
+/// A live scan is allowed to return the canonical spelling of a selector that
+/// an older saved draft serialized differently. Release must update that same
+/// staged board after the exact hardware mutation; otherwise the UI would say
+/// Released while the next refresh still treated the board as held by WinUSB.
+#[test]
+fn redesign_capture_release_restamps_an_equivalent_saved_selector() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let machine = Arc::new(ScriptedMachine::default());
+    let saved_selector = "USB:D209:0430:00";
+    stage_redesign_device(&control, saved_selector, "panel", "Saved I-PAC");
+    assert!(
+        control
+            .stage_edit(&ksx_api::StageEdit::SetDeviceBackend {
+                expected_selector: saved_selector.into(),
+                backend: "winusb".into(),
+            })
+            .ok
+    );
+    let addr = start_server_with_machine(control.clone(), machine.clone());
+
+    let released = post_form(addr, "/redesign/capture/release", RELEASE_IPAC_FORM);
+    assert!(released.contains("Keyboard%20released"), "{released}");
+    let after_release = control.staged();
+    let saved = after_release
+        .devices
+        .iter()
+        .find(|device| ksx_api::device_selectors_equal(&device.selector, saved_selector))
+        .expect("the equivalent saved board remains staged");
+    assert_eq!(
+        saved.backend, "interception",
+        "the canonical live selector must restamp its equivalent saved board"
     );
     assert_eq!(machine.released_with.lock().unwrap().len(), 1);
 }
@@ -7222,9 +7280,9 @@ fn the_redesign_operational_payload_fails_closed_when_the_daemon_is_down() {
         value["operations"]["session"]["reachable"], false,
         "{value}"
     );
-    assert_eq!(
-        value["journey"]["compact"], "Progress unavailable",
-        "{value}"
+    assert!(
+        value.get("journey").is_none(),
+        "the retired Setup journey must not survive as a dead API contract: {value}"
     );
     for action in ["save", "play", "apply", "stop", "adopt", "discard"] {
         assert_eq!(
@@ -7246,11 +7304,10 @@ fn the_redesign_operational_payload_fails_closed_when_the_daemon_is_down() {
     }
 }
 
-/// Progress cannot turn green because one player is mapped while another
-/// would plug dead. This is the redesign correction to the legacy rail's
-/// `any(slot has bindings)` test.
+/// Lifecycle readiness cannot turn green because one player is mapped while
+/// another would plug dead. Every disabled action keeps the exact blocker.
 #[test]
-fn the_redesign_progress_requires_live_bindings_on_every_controller() {
+fn the_redesign_lifecycle_requires_live_bindings_on_every_controller() {
     let control = Arc::new(ScriptedControl::new(false));
     let machine = Arc::new(ScriptedMachine::default());
     machine.winusb_claimed.store(false, Ordering::SeqCst);
@@ -7284,13 +7341,18 @@ fn the_redesign_progress_requires_live_bindings_on_every_controller() {
     let addr = start_server_with_machine(control, machine);
     let value: serde_json::Value =
         serde_json::from_str(body_of(&get(addr, "/api/redesign"))).expect("payload");
-    let mapping = value["journey"]["rows"]
-        .as_array()
-        .and_then(|rows| rows.iter().find(|row| row["key"] == "mapping"))
-        .expect("mapping step");
-    assert_eq!(mapping["badge"], "Now", "{value}");
     assert_eq!(value["operations"]["save"]["allowed"], false, "{value}");
     assert_eq!(value["operations"]["play"]["allowed"], false, "{value}");
+    for action in ["save", "play"] {
+        let reason = value["operations"][action]["reason"]
+            .as_str()
+            .expect("disabled lifecycle action has a reason");
+        assert!(reason.contains("Player 2"), "{action}: {reason}");
+        assert!(
+            reason.contains("Map at least one key"),
+            "{action}: {reason}"
+        );
+    }
 }
 
 /// Required checkboxes are progressive enhancement, not authority. A direct

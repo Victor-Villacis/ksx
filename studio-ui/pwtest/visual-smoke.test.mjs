@@ -27,6 +27,8 @@ const BENCH_A = deviceInstanceId(BENCH_A_SELECTOR); // Logitech G915 TKL
 const BENCH_B = deviceInstanceId(BENCH_B_SELECTOR); // Ultimarc I-PAC 4
 const BENCH_A_NAME = "Logitech G915 TKL";
 const BENCH_B_NAME = "Ultimarc I-PAC 4";
+const CTRL_A = "ctrl-slot-1";
+const CTRL_B = "ctrl-slot-2";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const targetDir = process.env.CARGO_TARGET_DIR
   ? path.resolve(process.env.CARGO_TARGET_DIR)
@@ -522,7 +524,7 @@ describe("redesign canvas interaction chrome", () => {
               document.querySelector(`[data-instance-id="${id}"]`)?.dataset.canvasX !==
                 undefined,
           ),
-        [BENCH_A, BENCH_B],
+        [BENCH_A, BENCH_B, CTRL_A, CTRL_B],
         { timeout: 20_000 },
       );
       await page.evaluate(() => new Promise((resolve) => {
@@ -550,6 +552,9 @@ describe("redesign canvas interaction chrome", () => {
 
       const stageItem = (id) =>
         page.locator(`.forma-canvas-stage > [data-instance-id="${id}"]`);
+      const ctrlAName = await stageItem(CTRL_A).getAttribute("data-widget-name");
+      const ctrlBName = await stageItem(CTRL_B).getAttribute("data-widget-name");
+      assert.ok(ctrlAName && ctrlBName, "fixture controllers expose canvas identities");
       // A mapped keyboard's centre is product content (a real key), not
       // generic canvas chrome. Select at the item edge so this canvas test
       // cannot accidentally invoke the mapping interaction it is hosting.
@@ -625,27 +630,35 @@ describe("redesign canvas interaction chrome", () => {
         return { width: bounds.width, height: bounds.height, outside };
       });
       await selectStageItem(BENCH_A);
+      assert.equal(
+        await page.locator(".rd-inspector:not([hidden])").count(),
+        0,
+        "physical devices keep their operational controls on the board",
+      );
+      await selectStageItem(CTRL_A);
       await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === false);
-      await page.locator('[data-nx="rd-insp-close"]').click();
+      if (await page.locator(".rd-inspector:not([hidden])").count()) {
+        await page.locator('[data-nx="rd-insp-close"]').click();
+      }
       assert.deepEqual(
         await inspectorLayout(),
         { hidden: true, display: "none", width: 0 },
         "Inspector X must remove the panel from layout, not only set an attribute",
       );
 
-      await selectStageItem(BENCH_A);
+      await selectStageItem(CTRL_A);
       await page.waitForFunction(
         (name) =>
           document.querySelector(".rd-inspector")?.hidden === false &&
           document.querySelector(".rd-insp-name")?.textContent === name,
-        BENCH_A_NAME,
+        ctrlAName,
       );
-      await selectStageItem(BENCH_B);
+      await selectStageItem(CTRL_B);
       await page.waitForFunction(
         (name) =>
           document.querySelector(".rd-inspector")?.hidden === false &&
           document.querySelector(".rd-insp-name")?.textContent === name,
-        BENCH_B_NAME,
+        ctrlBName,
       );
       const beforeFocus = await cameraState();
       await page.locator('.rd-inspector [data-nx="rd-focus-sel"]').click();
@@ -683,8 +696,8 @@ describe("redesign canvas interaction chrome", () => {
       // Resizing is a camera translation, not an implicit Fit. Focus's
       // private restore snapshot must receive the same translation, or
       // Escape returns to a view centred for the old window.
-      await selectStageItem(BENCH_A);
-      await selectStageItem(BENCH_B);
+      await selectStageItem(CTRL_A);
+      await selectStageItem(CTRL_B);
       const beforeFocusResize = await cameraState();
       await page.locator('.rd-inspector [data-nx="rd-focus-sel"]').click();
       await page.setViewportSize({ width: 1160, height: 720 });
@@ -716,8 +729,8 @@ describe("redesign canvas interaction chrome", () => {
         `plain resize moved world Y: ${JSON.stringify({ afterFocusResize, afterPlainResize })}`,
       );
 
-      await selectStageItem(BENCH_A);
-      const beforePosition = await stageItem(BENCH_A).evaluate((item) => ({
+      await selectStageItem(CTRL_A);
+      const beforePosition = await stageItem(CTRL_A).evaluate((item) => ({
         x: Number(item.dataset.canvasX),
         y: Number(item.dataset.canvasY),
       }));
@@ -726,7 +739,7 @@ describe("redesign canvas interaction chrome", () => {
       await page.getByRole("spinbutton", { name: "Y", exact: true }).fill(String(beforePosition.y + 23));
       await page.locator(".rd-insp-head .rd-map-title").click();
       assert.deepEqual(
-        await stageItem(BENCH_A).evaluate((item) => ({
+        await stageItem(CTRL_A).evaluate((item) => ({
           x: Number(item.dataset.canvasX),
           y: Number(item.dataset.canvasY),
         })),
@@ -828,7 +841,7 @@ describe("redesign canvas interaction chrome", () => {
           x: Number(item.dataset.canvasX) + Number(item.dataset.canvasWidth) / 2,
           y: Number(item.dataset.canvasY) + Number(item.dataset.canvasHeight) / 2,
         };
-      }, BENCH_A);
+      }, CTRL_A);
       await nextPaint();
       const afterMapPan = await cameraState();
       assert.ok(mappedWorldPoint && afterMapPan);
@@ -1015,7 +1028,7 @@ describe("redesign canvas interaction chrome", () => {
         document.querySelectorAll(".rd-palette-probe").forEach((probe) => probe.remove());
       });
 
-      await page.locator(".rd-setupd > .rd-setup-sum").focus();
+      await page.locator(".rd-profiled > .rd-profile-sum").focus();
       await page.keyboard.press("m");
       assert.equal(
         await page.locator(".forma-canvas-navigator").getAttribute("hidden"),
@@ -1023,17 +1036,17 @@ describe("redesign canvas interaction chrome", () => {
         "an unmodified canvas shortcut fired while title-bar focus was outside the canvas",
       );
 
-      await selectStageItem(BENCH_B);
-      const beforeChipTargetX = await stageItem(BENCH_B).evaluate(
+      await selectStageItem(CTRL_B);
+      const beforeChipTargetX = await stageItem(CTRL_B).evaluate(
         (item) => Number(item.dataset.canvasX),
       );
       await page.getByRole("spinbutton", { name: "X", exact: true }).fill("2200");
       await page.locator(".rd-insp-head .rd-map-title").click();
-      await selectStageItem(BENCH_A);
+      await selectStageItem(CTRL_A);
       await zoomMenuTrigger.click();
       await page.locator('[data-nx="rd-z-50"]').click();
       await page.locator('.rd-inspector [data-nx="rd-center-sel"]').click();
-      const chip = page.locator(".rd-chip", { hasText: BENCH_B_NAME });
+      const chip = page.locator(".rd-chip", { hasText: ctrlBName });
       await chip.waitFor({ state: "visible" });
       const beforeChipJump = await stage.evaluate((node) => node.style.transform);
       await chip.click();
@@ -1041,11 +1054,11 @@ describe("redesign canvas interaction chrome", () => {
         ({ id, name }) =>
           document.querySelector(".rd-insp-name")?.textContent === name &&
           document.querySelector(`[data-instance-id="${id}"]`)?.classList.contains("rd-pulse"),
-        { id: BENCH_B, name: BENCH_B_NAME },
+        { id: CTRL_B, name: ctrlBName },
       );
       assert.equal(await page.locator(".n-zoomval").textContent(), "90%");
       const chipLanding = await cameraState();
-      const chipTarget = await stageItem(BENCH_B).evaluate((item) => ({
+      const chipTarget = await stageItem(CTRL_B).evaluate((item) => ({
         x: Number(item.dataset.canvasX) + Number(item.dataset.canvasWidth) / 2,
       }));
       assert.ok(chipLanding);
@@ -1136,7 +1149,9 @@ describe("redesign canvas interaction chrome", () => {
       // The narrow layout turns the Inspector into a full-screen drawer. It
       // must neither feed 100vw into the camera's right inset nor strand
       // dialog focus below a short phone viewport.
-      await page.locator('[data-nx="rd-insp-close"]').click();
+      if (await page.locator(".rd-inspector:not([hidden])").count()) {
+        await page.locator('[data-nx="rd-insp-close"]').click();
+      }
       await page.setViewportSize({ width: 390, height: 667 });
       await page.evaluate(() => new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(resolve));
@@ -1150,21 +1165,20 @@ describe("redesign canvas interaction chrome", () => {
       );
 
       // The 390px viewport shows a sliver of the world, and the merged
-      // canvas (keyboard + encoder benches beside the device cards) spreads
-      // it wider than one phone screen — navigate to B through the map (the
-      // canvas's own door to an off-screen widget) before clicking it.
-      await page.evaluate((benchB) => {
+      // canvas spreads wider than one phone screen — navigate to a controller
+      // through the map before opening its full-screen Inspector.
+      await page.evaluate((controllerId) => {
         document
-          .querySelector(`.navigator-item[data-instance-id="${benchB}"]`)
+          .querySelector(`.navigator-item[data-instance-id="${controllerId}"]`)
           ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      }, BENCH_B);
+      }, CTRL_B);
       await page.waitForFunction(
-        (benchB) =>
+        (controllerId) =>
           !document.querySelector(".is-camera-animating") &&
           document.querySelector(
-            `.forma-canvas-stage > [data-instance-id="${benchB}"]`,
+            `.forma-canvas-stage > [data-instance-id="${controllerId}"]`,
           ),
-        BENCH_B,
+        CTRL_B,
       );
       // The map navigation SELECTED the item, and selection opens the
       // Inspector — at this width a full-screen drawer over the canvas.
@@ -1177,10 +1191,16 @@ describe("redesign canvas interaction chrome", () => {
         );
       }
       const beforeMobileInspector = await stage.evaluate((node) => node.style.transform);
-      // The encoder card is wider than a phone screen, so its CENTRE (the
-      // default click point) can sit outside the viewport even when the
-      // camera frames its corner — aim at the near corner instead.
-      await stageItem(BENCH_B).click({ position: { x: 24, y: 24 } });
+      await stageItem(CTRL_B).evaluate((item) => {
+        const rect = item.getBoundingClientRect();
+        item.dispatchEvent(new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: rect.left + 24,
+          clientY: rect.top + 24,
+        }));
+      });
       await page.waitForFunction(() => document.querySelector(".rd-inspector")?.hidden === false);
       assert.equal(
         await stage.evaluate((node) => node.style.transform),
@@ -1195,7 +1215,7 @@ describe("redesign canvas interaction chrome", () => {
 
       await page.getByRole("spinbutton", { name: "X", exact: true }).focus();
       await page.keyboard.press("Escape");
-      assert.equal(await stageItem(BENCH_B).getAttribute("aria-current"), "true");
+      assert.equal(await stageItem(CTRL_B).getAttribute("aria-current"), "true");
       assert.equal(await page.locator(".rd-inspector").getAttribute("hidden"), null);
       await page.locator('[data-nx="rd-insp-close"]').click();
 
@@ -1248,11 +1268,11 @@ describe("redesign canvas interaction chrome", () => {
         (id) => document.querySelector(
           `.forma-canvas-stage > [data-instance-id="${id}"]`,
         )?.dataset.canvasHeight,
-        BENCH_A,
+        CTRL_A,
         { timeout: 20_000 },
       );
       const item = page.locator(
-        `.forma-canvas-stage > [data-instance-id="${BENCH_A}"]`,
+        `.forma-canvas-stage > [data-instance-id="${CTRL_A}"]`,
       );
       await item.click({ position: { x: 4, y: 4 }, force: true });
       const originalHeight = await item.evaluate((node) => Number(node.dataset.canvasHeight));
@@ -1266,7 +1286,7 @@ describe("redesign canvas interaction chrome", () => {
             if (item instanceof HTMLElement) item.style.height = `${item.offsetHeight + 80}px`;
           }, 20);
         }, { once: true });
-      }, BENCH_A);
+      }, CTRL_A);
       await page.locator('.rd-inspector [data-nx="rd-focus-sel"]').click();
       await page.waitForFunction(
         ({ height, id }) =>
@@ -1274,7 +1294,7 @@ describe("redesign canvas interaction chrome", () => {
             `.forma-canvas-stage > [data-instance-id="${id}"]`,
           )?.dataset.canvasHeight) >=
             height + 79,
-        { height: originalHeight, id: BENCH_A },
+        { height: originalHeight, id: CTRL_A },
         { timeout: 5_000 },
       );
       await page.evaluate(() => new Promise((resolve) => {
@@ -1305,7 +1325,7 @@ describe("redesign canvas interaction chrome", () => {
               (viewportRect.top + viewportRect.height / 2),
           ),
         };
-      }, BENCH_A);
+      }, CTRL_A);
       assert.ok(landing && landing.x <= 2 && landing.y <= 2,
         `late widget geometry escaped reduced-motion Focus (${JSON.stringify(landing)})`);
     } finally {
@@ -1339,9 +1359,13 @@ describe("redesign canvas interaction chrome", () => {
         (ids) => ids.every((id) => document.querySelector(
           `.forma-canvas-stage > [data-instance-id="${id}"]`,
         )?.dataset.canvasHeight),
-        [BENCH_A, BENCH_B],
+        [BENCH_A, BENCH_B, CTRL_A, CTRL_B],
         { timeout: 20_000 },
       );
+      const ctrlBName = await page.locator(
+        `.forma-canvas-stage > [data-instance-id="${CTRL_B}"]`,
+      ).getAttribute("data-widget-name");
+      assert.ok(ctrlBName);
 
       const inspectorMotion = await page.evaluate((id) => {
         document.querySelector(
@@ -1358,7 +1382,7 @@ describe("redesign canvas interaction chrome", () => {
           duration: animation?.effect?.getTiming().duration ?? null,
           playState: animation?.playState ?? null,
         };
-      }, BENCH_B);
+      }, CTRL_B);
       assert.deepEqual(inspectorMotion, {
         hidden: false,
         duration: 200,
@@ -1369,7 +1393,7 @@ describe("redesign canvas interaction chrome", () => {
       await page.getByRole("spinbutton", { name: "X", exact: true }).fill("2200");
       await page.locator(".rd-insp-head .rd-map-title").click();
       await page.locator(
-        `.forma-canvas-stage > [data-instance-id="${BENCH_A}"]`,
+        `.forma-canvas-stage > [data-instance-id="${CTRL_A}"]`,
       ).evaluate((item) => {
         const rect = item.getBoundingClientRect();
         item.dispatchEvent(new PointerEvent("pointerdown", {
@@ -1385,7 +1409,7 @@ describe("redesign canvas interaction chrome", () => {
       await page.waitForFunction(() => !document.querySelector(".is-camera-animating"));
       await page.locator('.rd-inspector [data-nx="rd-center-sel"]').click();
       await page.waitForFunction(() => !document.querySelector(".is-camera-animating"));
-      const chip = page.locator(".rd-chip", { hasText: BENCH_B_NAME });
+      const chip = page.locator(".rd-chip", { hasText: ctrlBName });
       await chip.waitFor({ state: "visible" });
 
       const cameraMotion = await page.evaluate((name) => {
@@ -1405,7 +1429,7 @@ describe("redesign canvas interaction chrome", () => {
           animating: document.querySelector(".forma-canvas-viewport")
             ?.classList.contains("is-camera-animating"),
         };
-      }, BENCH_B_NAME);
+      }, ctrlBName);
       assert.ok(cameraMotion);
       assert.ok(Math.abs(cameraMotion.before - 0.5) < 0.01);
       assert.ok(Math.abs(cameraMotion.immediate - cameraMotion.before) < 0.03,

@@ -99,6 +99,10 @@ export interface WidgetCanvasOptions {
   navigationModel?: "map" | "design-tool";
   /** ksx: camera zoom limits; the design-tool lane runs 0.08–3. */
   zoomRange?: { min: number; max: number };
+  /** Fixed page chrome that command rails must not sit behind. Unlike focus
+   * insets this does not move the camera or resize the canvas; it only narrows
+   * the safe screen rectangle used to place an active widget's move handle. */
+  commandViewportInsets?: WidgetCanvasViewportInsets;
   /** ksx: select/hand tool changed (design-tool model only). */
   onToolModeChange?: (mode: "select" | "hand") => void;
   /** ksx: the multi-selection changed. Fires alongside onActiveChange —
@@ -517,6 +521,7 @@ export class WidgetCanvas {
    *  camera command computes against the SAFE viewport — the canvas minus
    *  this — so fit/centre land in the visible area, not under the panel. */
   #safeInsetRight = 0;
+  readonly #commandViewportInsets: WidgetCanvasViewportInsets;
   readonly #cameraHistory: CameraHistoryEntry[] = [];
   #viewportFrame: ViewportFrame = { width: 0, height: 0, safeWidth: 0 };
   #zoomTier: "overview" | "structure" | "editing" | null = null;
@@ -559,6 +564,7 @@ export class WidgetCanvas {
     this.#navigationModel = options.navigationModel ?? "map";
     this.#zoomMin = options.zoomRange?.min ?? MIN_ZOOM;
     this.#zoomMax = options.zoomRange?.max ?? MAX_ZOOM;
+    this.#commandViewportInsets = normalizedViewportInsets(options.commandViewportInsets) ?? {};
     this.#onToolModeChange = options.onToolModeChange ?? (() => undefined);
     this.#onSelectionChange = options.onSelectionChange ?? (() => undefined);
     this.#onZoomChange = options.onZoomChange ?? (() => undefined);
@@ -992,17 +998,24 @@ export class WidgetCanvas {
     if (canvasItemOwnedFocus) this.focusViewport();
   }
 
-  setActive(item: HTMLElement): void {
+  setActive(
+    item: HTMLElement,
+    options: { raiseIfNeeded?: boolean } = {},
+  ): void {
     const id = this.#itemId(item);
     if (!this.#items.has(id)) return;
-    if (id === this.#activeId) {
+    const activeNeedsRaise = id === this.#activeId && options.raiseIfNeeded === true &&
+      Array.from(this.#items.values()).some((candidate) =>
+        candidate !== item && this.getItemState(candidate).z >= this.getItemState(item).z
+      );
+    if (id === this.#activeId && !activeNeedsRaise) {
       // Re-selecting the primary item is still a fresh editing intent. Hosts
       // with dismissible selection chrome (the redesign Inspector) need this
       // signal to reopen it when the same item is clicked again.
       this.#onSelectionChange(this.selectedItems());
       return;
     }
-    const retargetFocus = this.#focusSession !== null;
+    const retargetFocus = this.#focusSession !== null && this.#focusSession.itemId !== id;
     if (this.#focusSession) this.#focusSession.itemId = id;
     this.#selectItem(item, this.#canRaiseSelection());
     if (retargetFocus) {
@@ -1162,6 +1175,39 @@ export class WidgetCanvas {
     }
     this.#applyCenterCamera(item);
     this.#animateCamera({ itemId: this.#itemId(item), mode: "center" });
+  }
+
+  /** Pan just enough to reveal one control inside a mounted widget. Dense
+   * physical boards can be intentionally wider than a phone viewport at the
+   * minimum honest interaction scale; centring the whole board would still
+   * leave an edge-mounted action unreachable. */
+  revealElement(target: HTMLElement, margin = 18): boolean {
+    const item = target.closest<HTMLElement>(".widget-instance");
+    if (!item || this.#items.get(this.#itemId(item)) !== item) return false;
+    this.#stopCameraAnimation();
+    this.#renderCameraNow();
+    const viewport = this.#viewport.getBoundingClientRect();
+    const frame = this.#safeViewportFrame(viewport);
+    const inset = clamp(margin, 0, Math.min(frame.width, frame.height) / 4);
+    const safeLeft = viewport.left + frame.x + inset;
+    const safeRight = viewport.left + frame.x + frame.width - inset;
+    const safeTop = viewport.top + frame.y + inset;
+    const safeBottom = viewport.top + frame.y + frame.height - inset;
+    const rect = target.getBoundingClientRect();
+    let deltaX = 0;
+    let deltaY = 0;
+    if (rect.width > safeRight - safeLeft) deltaX = safeLeft - rect.left;
+    else if (rect.left < safeLeft) deltaX = safeLeft - rect.left;
+    else if (rect.right > safeRight) deltaX = safeRight - rect.right;
+    if (rect.height > safeBottom - safeTop) deltaY = safeTop - rect.top;
+    else if (rect.top < safeTop) deltaY = safeTop - rect.top;
+    else if (rect.bottom > safeBottom) deltaY = safeBottom - rect.bottom;
+    if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5) return false;
+    this.#camera.panX += deltaX;
+    this.#camera.panY += deltaY;
+    this.#renderCameraNow();
+    this.#scheduleChange();
+    return true;
   }
 
   toggleFocusMode(item: HTMLElement, options: WidgetCanvasFocusOptions = {}): boolean {
@@ -3195,6 +3241,25 @@ export class WidgetCanvas {
       width: viewportWidth / this.#camera.zoom,
       height: viewportHeight / this.#camera.zoom,
     };
+    const commandLeft = Math.max(0, this.#commandViewportInsets.left ?? 0);
+    const commandTop = Math.max(0, this.#commandViewportInsets.top ?? 0);
+    const commandRight = Math.max(
+      this.#safeInsetRight,
+      this.#commandViewportInsets.right ?? 0,
+    );
+    const commandBottom = Math.max(0, this.#commandViewportInsets.bottom ?? 0);
+    const commandVisible: WorldRect = {
+      x: visible.x + commandLeft / this.#camera.zoom,
+      y: visible.y + commandTop / this.#camera.zoom,
+      width: Math.max(
+        1 / this.#camera.zoom,
+        (viewportWidth - commandLeft - commandRight) / this.#camera.zoom,
+      ),
+      height: Math.max(
+        1 / this.#camera.zoom,
+        (viewportHeight - commandTop - commandBottom) / this.#camera.zoom,
+      ),
+    };
     const visibleCenterX = visible.x + visible.width / 2;
     const visibleCenterY = visible.y + visible.height / 2;
     const visibleHalfWidth = visible.width / 2;
@@ -3265,7 +3330,7 @@ export class WidgetCanvas {
       const opacity = automaticOpacity.toFixed(3);
       const effectiveScale = Number(scale);
       if (!isDragging && !this.#viewport.classList.contains("is-camera-animating")) {
-        this.#updateItemChromePlacement(item, state, visible, effectiveScale);
+        this.#updateItemChromePlacement(item, state, commandVisible, effectiveScale);
       }
       if (item.dataset.attentionState !== attentionState) {
         item.dataset.attentionState = attentionState;

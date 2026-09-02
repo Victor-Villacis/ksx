@@ -1420,7 +1420,7 @@ pub(super) struct RedesignBlockingForm {
 }
 
 /// POST /redesign/blocking — how the staged input's keys behave while Play
-/// runs (freeze / split / take nothing), through the shared core. One
+/// runs (Take all / Split / Pass through), through the shared core. One
 /// staged edit in the daemon; nothing saved or started.
 pub(super) async fn redesign_form_blocking(
     State(state): State<Arc<AppState>>,

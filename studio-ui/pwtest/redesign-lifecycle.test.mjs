@@ -312,11 +312,21 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
     const dirtyBeforeReplace = (await page.locator(".rd-profile-state").textContent())?.trim();
 
     const applyButton = page.locator('[data-rd-form="apply"] button');
+    const authorityPeer = await openBench();
+    await openControllerInspector(authorityPeer);
+    const peerSocd = authorityPeer.locator('[data-rd-form="controller-socd"]');
+    const peerSelect = peerSocd.locator('select[name="socd"]');
+    const peerCurrent = await peerSelect.inputValue();
+    const peerNext = await peerSelect.locator("option").evaluateAll(
+      (options, current) => options.find((option) => option.value !== current)?.value ?? "",
+      peerCurrent,
+    );
 
     // Freeze Apply's post-refusal refresh, advance the draft from a second
     // tab, then let the first tab continue. The old refusal must never become
     // permission to replace the newer draft/session authority.
     let armApplyRefresh = false;
+    let armApplyResponse = false;
     let releaseApplyRefresh;
     let reportApplyRefresh;
     const applyRefreshBlocked = new Promise((resolve) => {
@@ -324,6 +334,19 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
     });
     const applyRefreshGate = new Promise((resolve) => {
       releaseApplyRefresh = resolve;
+    });
+    // Arm the refresh gate only after the Apply response exists but before the
+    // browser receives it. Arming before click lets the two-second background
+    // poll consume this one-shot route while Playwright is checking actionability.
+    await page.route("**/redesign/api/apply", async (route) => {
+      if (!armApplyResponse) {
+        await route.continue();
+        return;
+      }
+      armApplyResponse = false;
+      const response = await route.fetch();
+      armApplyRefresh = true;
+      await route.fulfill({ response });
     });
     await page.route("**/api/redesign*", async (route) => {
       if (!armApplyRefresh) {
@@ -335,29 +358,25 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
       await applyRefreshGate;
       await route.continue();
     });
-    armApplyRefresh = true;
-    await applyButton.click();
-    await applyRefreshBlocked;
-    const authorityPeer = await openBench();
-    await openControllerInspector(authorityPeer);
-    const peerSocd = authorityPeer.locator('[data-rd-form="controller-socd"]');
-    const peerSelect = peerSocd.locator('select[name="socd"]');
-    const peerCurrent = await peerSelect.inputValue();
-    const peerNext = await peerSelect.locator("option").evaluateAll(
-      (options, current) => options.find((option) => option.value !== current)?.value ?? "",
-      peerCurrent,
-    );
-    await peerSelect.selectOption(peerNext);
-    await peerSocd.locator('button[type="submit"]').click();
-    await authorityPeer.waitForFunction(
-      () => document.querySelector(".rd-flash")?.textContent?.includes("Draft updated"),
-    );
-    releaseApplyRefresh();
-    await page.waitForFunction(
-      () => document.querySelector(".rd-flash")?.textContent?.includes("changed while Apply was checked"),
-    );
-    assert.equal(await page.locator("[data-rd-apply-dialog]").isHidden(), true);
-    await page.unroute("**/api/redesign*");
+    try {
+      armApplyResponse = true;
+      await applyButton.click();
+      await applyRefreshBlocked;
+      await peerSelect.selectOption(peerNext);
+      await peerSocd.locator('button[type="submit"]').click();
+      await authorityPeer.waitForFunction(
+        () => document.querySelector(".rd-flash")?.textContent?.includes("Draft updated"),
+      );
+      releaseApplyRefresh();
+      await page.waitForFunction(
+        () => document.querySelector(".rd-flash")?.textContent?.includes("changed while Apply was checked"),
+      );
+      assert.equal(await page.locator("[data-rd-apply-dialog]").isHidden(), true);
+    } finally {
+      releaseApplyRefresh();
+      await page.unroute("**/api/redesign*");
+      await page.unroute("**/redesign/api/apply");
+    }
 
     // A refused Apply is not permission on its own. If the mandatory
     // authority refresh cannot complete, keep the precise reload recovery;

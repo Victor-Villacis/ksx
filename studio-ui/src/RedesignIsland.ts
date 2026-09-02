@@ -3454,21 +3454,38 @@ function syncInspectorToSelection(items: HTMLElement[]): void {
 // that jitter during a pan are worse than arrows that appear when you stop.
 
 let chipsTimer = 0;
+const CHIP_TRANSIENT_SELECTOR =
+  ".is-camera-animating, .is-camera-moving, .is-panning, " +
+  ".is-navigating, .is-dragging-widget";
+
+function chipViewportIsMoving(root: HTMLElement): boolean {
+  return root.querySelector<HTMLElement>(".forma-canvas-viewport")
+    ?.matches(CHIP_TRANSIENT_SELECTOR) === true;
+}
+
 function scheduleChips(): void {
   window.clearTimeout(chipsTimer);
-  // A stale chip must not remain clickable above moving stage chrome while
-  // this settle debounce is running. The final onCommit/onChange schedules
-  // the replacement against stationary geometry.
   const rail = rdRoot?.querySelector<HTMLElement>(".rd-chips");
-  if (rail) {
+  // Only real canvas motion invalidates the current screen-space targets.
+  // Roster polling also asks for a reconcile every two seconds; clearing here
+  // for that stationary no-op would detach a focused chip and strand keyboard
+  // focus on <body> before the identical target is painted again.
+  if (rail && rdRoot && chipViewportIsMoving(rdRoot)) {
     rail.replaceChildren();
   }
   chipsTimer = window.setTimeout(syncChips, 150);
 }
 
+interface ChipScreenRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 function screenRectsOverlap(
-  left: DOMRectReadOnly,
-  right: DOMRectReadOnly,
+  left: ChipScreenRect,
+  right: ChipScreenRect,
   clearance = 0,
 ): boolean {
   return left.left < right.right + clearance &&
@@ -3477,20 +3494,87 @@ function screenRectsOverlap(
     left.bottom > right.top - clearance;
 }
 
-/** Proximity navigation is secondary chrome. If its delayed screen-space
- *  placement would cover a visible move handle, the handle wins: activating
- *  a chip at that point would fly the camera instead of moving the board.
- *  The next camera/selection settle rebuilds the capped chip list, so a
- *  suppressed chip returns as soon as the two controls no longer collide. */
-function suppressChipsBlockingMoveHandles(root: HTMLElement, rail: HTMLElement): void {
-  const handles = Array.from(
+function screenRectWithin(
+  candidate: ChipScreenRect,
+  bounds: ChipScreenRect,
+  tolerance = 0.5,
+): boolean {
+  return candidate.left >= bounds.left - tolerance &&
+    candidate.right <= bounds.right + tolerance &&
+    candidate.top >= bounds.top - tolerance &&
+    candidate.bottom <= bounds.bottom + tolerance;
+}
+
+function visibleMoveHandleRects(root: HTMLElement): DOMRect[] {
+  return Array.from(
     root.querySelectorAll<HTMLElement>(".widget-drag-handle"),
   ).filter(renderedFocusTarget).map((handle) => handle.getBoundingClientRect());
-  if (handles.length === 0) return;
+}
+
+function boundedAxisCandidates(
+  ideal: number,
+  minimum: number,
+  maximum: number,
+  step: number,
+): number[] {
+  if (minimum > maximum) return [];
+  const clamped = Math.min(maximum, Math.max(minimum, ideal));
+  const values: number[] = [];
+  const seen = new Set<string>();
+  const add = (value: number): void => {
+    const bounded = Math.min(maximum, Math.max(minimum, value));
+    const key = bounded.toFixed(3);
+    if (seen.has(key)) return;
+    seen.add(key);
+    values.push(bounded);
+  };
+  add(clamped);
+  for (let delta = step; delta <= maximum - minimum + step; delta += step) {
+    add(clamped + delta);
+    add(clamped - delta);
+  }
+  add(minimum);
+  add(maximum);
+  return values;
+}
+
+function chipRectAt(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  railRect: DOMRectReadOnly,
+): ChipScreenRect {
+  const centerX = railRect.left + x;
+  const centerY = railRect.top + y;
+  return {
+    left: centerX - width / 2,
+    right: centerX + width / 2,
+    top: centerY - height / 2,
+    bottom: centerY + height / 2,
+  };
+}
+
+/** Final screen-space backstop for sub-pixel layout changes. Placement below
+ *  should already satisfy both rules; if fonts or browser rounding disagree,
+ *  secondary navigation yields to the visible move handle and clipped canvas. */
+function suppressInvalidChips(
+  root: HTMLElement,
+  rail: HTMLElement,
+  safeBounds: ChipScreenRect,
+): void {
+  const handles = visibleMoveHandleRects(root);
+  const retained: DOMRect[] = [];
   for (const chip of Array.from(rail.querySelectorAll<HTMLElement>(".rd-chip"))) {
     const chipRect = chip.getBoundingClientRect();
-    if (handles.some((handleRect) => screenRectsOverlap(chipRect, handleRect, 8))) {
+    if (
+      !screenRectWithin(chipRect, safeBounds) ||
+      handles.some((handleRect) => screenRectsOverlap(chipRect, handleRect, 8)) ||
+      retained.some((retainedRect) => screenRectsOverlap(chipRect, retainedRect, 8))
+    ) {
       chip.remove();
+    } else {
+      retained.push(chipRect);
     }
   }
 }
@@ -3509,14 +3593,12 @@ function syncChips(): void {
   const viewport = root.querySelector<HTMLElement>(".forma-canvas-viewport");
   const rect = viewport?.getBoundingClientRect();
   if (!rect) return;
-  // scheduleChips is intentionally settle-debounced, but its timer can still
-  // land during a longer camera transition or held gesture. Never mint
-  // clickable screen-space chrome from that intermediate matrix. The final
-  // canvas change/commit schedules a stationary replacement.
-  if (viewport.matches(
-    ".is-camera-animating, .is-camera-moving, .is-panning, " +
-      ".is-navigating, .is-dragging-widget",
-  )) {
+  // A settle timer can land during a longer transition or held gesture.
+  // Remove intermediate targets and keep checking until the final transform;
+  // relying only on a terminal callback leaves gaps when motion is cancelled.
+  if (viewport.matches(CHIP_TRANSIENT_SELECTOR)) {
+    rail.replaceChildren();
+    chipsTimer = window.setTimeout(syncChips, 150);
     return;
   }
   const camera = canvas.getCamera();
@@ -3555,54 +3637,124 @@ function syncChips(): void {
     });
   }
   offscreen.sort((a, b) => a.dist - b.dist);
-  // Seed the chip-spread collision field with active move chrome. This keeps
-  // an off-screen shortcut available where room exists without letting that
-  // secondary control occupy the board handle's visible grab target.
-  const placed: { x: number; y: number }[] = Array.from(
-    root.querySelectorAll<HTMLElement>(
-      ".widget-instance.is-active .widget-drag-handle",
-    ),
-  ).filter(renderedFocusTarget).map((handle) => {
-    const handleRect = handle.getBoundingClientRect();
-    return {
-      x: handleRect.left + handleRect.width / 2 - rect.left,
-      y: handleRect.top + handleRect.height / 2 - rect.top,
-    };
-  });
-  rail.replaceChildren(
-    ...offscreen.slice(0, 4).map(({ item, name, sx, sy, dist }) => {
-      const chip = document.createElement("button");
+  const railRect = rail.getBoundingClientRect();
+  const viewportOffsetX = rect.left - railRect.left;
+  const viewportOffsetY = rect.top - railRect.top;
+  const safeBounds: ChipScreenRect = {
+    left: rect.left + 8,
+    right: rect.left + safeWidth - 8,
+    top: rect.top + 8,
+    bottom: rect.bottom - 8,
+  };
+  const focusedChip = document.activeElement instanceof HTMLButtonElement &&
+      document.activeElement.classList.contains("rd-chip") && rail.contains(document.activeElement)
+    ? document.activeElement
+    : null;
+  const focusedTarget = focusedChip?.dataset.rdChipTarget ?? "";
+  const existing = new Map<string, HTMLButtonElement>();
+  for (const chip of rail.querySelectorAll<HTMLButtonElement>(".rd-chip[data-rd-chip-target]")) {
+    const target = chip.dataset.rdChipTarget ?? "";
+    if (target && !existing.has(target)) existing.set(target, chip);
+  }
+  const obstacles: ChipScreenRect[] = visibleMoveHandleRects(root);
+  const desired: HTMLButtonElement[] = [];
+
+  // Try every ranked off-screen item until four FIT. A blocked near item must
+  // not prevent a later usable shortcut from occupying the capped rail.
+  for (const { item, name, sx, sy, dist } of offscreen) {
+    if (desired.length >= 4) break;
+    const instanceId = item.dataset.instanceId ?? "";
+    if (!instanceId) continue;
+    let chip = existing.get(instanceId);
+    const isNew = !chip;
+    if (!chip) {
+      chip = document.createElement("button");
       chip.type = "button";
       chip.className = "rd-chip";
-      // Clamped clear of the lane's own corners (the tool rail, the map
-      // panel, the zoom pill) — a chip under other chrome is a control that
-      // cannot be pressed — and SPREAD when several widgets sit off in the
-      // same direction, or the nearer chip buries the rest.
-      let x = Math.min(Math.max(sx, 96), safeWidth - 20);
-      let y = Math.min(Math.max(sy, 56), rect.height - 72);
-      while (placed.some((p) => Math.abs(p.x - x) < 90 && Math.abs(p.y - y) < 30)) {
-        y = Math.min(y + 34, rect.height - 72);
-        if (y >= rect.height - 72) x += 120;
-      }
-      placed.push({ x, y });
-      chip.style.left = `${x}px`;
-      chip.style.top = `${y}px`;
-      const angle = Math.atan2(
-        sy - rect.height / 2,
-        sx - safeWidth / 2,
-      );
+      chip.dataset.rdChipTarget = instanceId;
+      chip.style.visibility = "hidden";
       const caret = document.createElement("span");
       caret.className = "rd-chip-caret";
-      caret.style.transform = `rotate(${Math.round((angle * 180) / Math.PI)}deg)`;
       caret.textContent = "➤";
       const label = document.createElement("span");
-      label.textContent = `${name} · ${dist}px`;
+      label.className = "rd-chip-label";
       chip.append(caret, label);
-      chip.addEventListener("click", () => flyToWidget(item));
-      return chip;
-    }),
-  );
-  suppressChipsBlockingMoveHandles(root, rail);
+      rail.append(chip);
+    }
+    chip.style.maxWidth = `${Math.max(44, safeWidth - 16)}px`;
+    const caret = chip.querySelector<HTMLElement>(".rd-chip-caret");
+    const label = chip.querySelector<HTMLElement>(".rd-chip-label");
+    if (!caret || !label) {
+      chip.remove();
+      continue;
+    }
+    const angle = Math.atan2(sy - rect.height / 2, sx - safeWidth / 2);
+    caret.style.transform = `rotate(${Math.round((angle * 180) / Math.PI)}deg)`;
+    label.textContent = `${name} · ${dist}px`;
+    chip.onclick = () => {
+      const liveRoot = rdRoot;
+      const liveItem = Array.from(
+        liveRoot?.querySelectorAll<HTMLElement>(
+          ".forma-canvas-stage > [data-instance-id]",
+        ) ?? [],
+      ).find((candidate) => candidate.dataset.instanceId === instanceId);
+      if (liveItem) flyToWidget(liveItem);
+    };
+
+    // Measure the real localized label, then search a finite grid whose every
+    // point keeps the COMPLETE pill inside the usable viewport. Unlike the old
+    // x += 120 loop, no candidate can escape the right edge.
+    const measured = chip.getBoundingClientRect();
+    const width = measured.width;
+    const height = measured.height;
+    const minX = viewportOffsetX + Math.max(96, width / 2 + 8);
+    const maxX = viewportOffsetX + Math.min(safeWidth - 20, safeWidth - width / 2 - 8);
+    const minY = viewportOffsetY + Math.max(56, height / 2 + 8);
+    const maxY = viewportOffsetY + Math.min(
+      rect.height - 72,
+      rect.height - height / 2 - 8,
+    );
+    const idealX = viewportOffsetX + Math.min(Math.max(sx, 96), safeWidth - 20);
+    const idealY = viewportOffsetY + Math.min(Math.max(sy, 56), rect.height - 72);
+    const xs = boundedAxisCandidates(idealX, minX, maxX, Math.max(120, width + 8));
+    const ys = boundedAxisCandidates(idealY, minY, maxY, Math.max(34, height + 8));
+    const candidates = xs.flatMap((x) => ys.map((y) => ({ x, y })))
+      .sort((left, right) =>
+        Math.hypot(left.x - idealX, left.y - idealY) -
+        Math.hypot(right.x - idealX, right.y - idealY)
+      );
+    const placement = candidates.find(({ x, y }) => {
+      const candidateRect = chipRectAt(x, y, width, height, railRect);
+      return screenRectWithin(candidateRect, safeBounds) &&
+        !obstacles.some((blocked) => screenRectsOverlap(candidateRect, blocked, 8));
+    });
+    if (!placement) {
+      if (isNew) chip.remove();
+      continue;
+    }
+    chip.style.left = `${placement.x}px`;
+    chip.style.top = `${placement.y}px`;
+    chip.style.visibility = "";
+    obstacles.push(chipRectAt(placement.x, placement.y, width, height, railRect));
+    desired.push(chip);
+  }
+
+  const retained = new Set(desired);
+  for (const chip of Array.from(rail.querySelectorAll<HTMLButtonElement>(".rd-chip"))) {
+    if (!retained.has(chip)) chip.remove();
+  }
+  desired.forEach((chip, index) => {
+    if (rail.children[index] !== chip) rail.insertBefore(chip, rail.children[index] ?? null);
+  });
+  suppressInvalidChips(root, rail, safeBounds);
+  if (focusedTarget) {
+    const replacement = desired.find(
+      (chip) => chip.isConnected && chip.dataset.rdChipTarget === focusedTarget,
+    );
+    if (replacement && document.activeElement !== replacement) {
+      replacement.focus({ preventScroll: true });
+    }
+  }
 }
 
 // ── Hover spotlight v0 (design handoff §6.5) ────────────────────────────────

@@ -94,6 +94,111 @@ async function openBench(viewport = { width: 1600, height: 1000 }) {
   return page;
 }
 
+const PROXIMITY_PROBE_PREFIX = "chip-collision-probe-";
+const PROXIMITY_PROBE_NAME = "Collision probe";
+
+async function mountProximityCollisionProbes(page, count = 4) {
+  await page.evaluate(async () => {
+    const viewport = document.querySelector(".forma-canvas-viewport");
+    const stage = document.querySelector(".forma-canvas-stage");
+    if (!(viewport instanceof HTMLElement) || !(stage instanceof HTMLElement)) {
+      throw new Error("the canvas was not ready for proximity probes");
+    }
+    const transient =
+      ".is-camera-animating, .is-camera-moving, .is-panning, " +
+      ".is-navigating, .is-dragging-widget";
+    let previousTransform = "";
+    let stableFrames = 0;
+    const deadline = performance.now() + 5_000;
+    while (performance.now() < deadline) {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const transform = getComputedStyle(stage).transform;
+      if (!viewport.matches(transient) && transform === previousTransform) stableFrames += 1;
+      else stableFrames = 0;
+      previousTransform = transform;
+      if (stableFrames >= 3) return;
+    }
+    throw new Error("the canvas camera never settled for proximity probes");
+  });
+  await page.evaluate(({ count, idPrefix, namePrefix }) => {
+    const viewport = document.querySelector(".forma-canvas-viewport");
+    const stage = document.querySelector(".forma-canvas-stage");
+    if (!(viewport instanceof HTMLElement) || !(stage instanceof HTMLElement)) {
+      throw new Error("the canvas was not ready for proximity probes");
+    }
+    const viewportRect = viewport.getBoundingClientRect();
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(stage).transform);
+    const zoom = matrix.a;
+    if (!Number.isFinite(zoom) || zoom <= 0) throw new Error("canvas zoom was invalid");
+    // All four targets begin just beyond the same lower-right edge. The old
+    // collision loop exhausted its vertical clamp and then pushed their chip
+    // centres beyond the right edge; a bounded placer must find four real
+    // in-viewport slots instead.
+    const worldX = (viewportRect.width + 24 - matrix.e) / zoom;
+    const worldY = (viewportRect.height + 24 - matrix.f) / zoom;
+    for (let index = 0; index < count; index += 1) {
+      const probe = document.createElement("div");
+      probe.hidden = true;
+      probe.dataset.instanceId = `${idPrefix}${index + 1}`;
+      probe.dataset.widgetName = `${namePrefix} ${index + 1}`;
+      probe.dataset.canvasX = String(worldX);
+      probe.dataset.canvasY = String(worldY);
+      probe.dataset.canvasWidth = "280";
+      probe.dataset.canvasHeight = "220";
+      probe.dataset.canvasZ = "1";
+      probe.dataset.canvasManualScale = "1";
+      stage.append(probe);
+    }
+    window.dispatchEvent(new Event("resize"));
+  }, { count, idPrefix: PROXIMITY_PROBE_PREFIX, namePrefix: PROXIMITY_PROBE_NAME });
+  try {
+    await page.waitForFunction(
+      ({ count, idPrefix }) => document.querySelectorAll(
+        `.rd-chip[data-rd-chip-target^="${idPrefix}"]`,
+      ).length === count,
+      { count, idPrefix: PROXIMITY_PROBE_PREFIX },
+      { timeout: 5_000 },
+    );
+  } catch (error) {
+    const snapshot = await page.evaluate(() => {
+      const viewport = document.querySelector(".forma-canvas-viewport");
+      const stage = document.querySelector(".forma-canvas-stage");
+      const rail = document.querySelector(".rd-chips");
+      const matrix = stage instanceof HTMLElement
+        ? new DOMMatrixReadOnly(getComputedStyle(stage).transform)
+        : null;
+      return {
+        chips: Array.from(document.querySelectorAll(".rd-chip")).map((chip) => ({
+          text: chip.textContent,
+          rect: chip.getBoundingClientRect().toJSON(),
+        })),
+        probes: Array.from(document.querySelectorAll('[data-instance-id^="chip-collision-probe-"]'))
+          .map((probe) => ({
+            ...probe.dataset,
+            projected: matrix
+              ? {
+                  left: Number(probe.dataset.canvasX) * matrix.a + matrix.e,
+                  top: Number(probe.dataset.canvasY) * matrix.d + matrix.f,
+                }
+              : null,
+          })),
+        viewport: viewport instanceof HTMLElement
+          ? {
+              rect: viewport.getBoundingClientRect().toJSON(),
+              className: viewport.className,
+              focusMode: viewport.dataset.widgetFocusMode,
+            }
+          : null,
+        stageTransform: stage instanceof HTMLElement ? getComputedStyle(stage).transform : null,
+        rail: rail instanceof HTMLElement ? rail.getBoundingClientRect().toJSON() : null,
+      };
+    });
+    throw new Error(`proximity probes did not settle: ${JSON.stringify(snapshot)}`, {
+      cause: error,
+    });
+  }
+}
+
 async function ensureIpacStagedAndMounted(page) {
   const board = page.locator(`.rd-dev-node[data-selector="${IPAC}"]`);
   await page.locator('[data-nx="rd-devs-open"]').click();
@@ -1185,6 +1290,106 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
       } finally {
         if (!page.isClosed()) await page.close();
       }
+    }
+  });
+
+  test("proximity chips stay bounded and keep focus across background refresh", async () => {
+    const page = await openBench({ width: 800, height: 700 });
+    let releasePoll;
+    let reportPoll;
+    const pollSeen = new Promise((resolve) => { reportPoll = resolve; });
+    const pollGate = new Promise((resolve) => { releasePoll = resolve; });
+    try {
+      const inspectorClose = page.locator('[data-nx="rd-insp-close"]:visible');
+      if (await inspectorClose.count()) await inspectorClose.click();
+      await mountProximityCollisionProbes(page);
+
+      const geometry = await page.evaluate((idPrefix) => {
+        const viewport = document.querySelector(".forma-canvas-viewport")
+          ?.getBoundingClientRect();
+        const chips = Array.from(document.querySelectorAll(
+          `.rd-chip[data-rd-chip-target^="${idPrefix}"]`,
+        ))
+          .map((chip) => {
+            const rect = chip.getBoundingClientRect();
+            return {
+              label: chip.textContent,
+              left: rect.left,
+              right: rect.right,
+              top: rect.top,
+              bottom: rect.bottom,
+            };
+          });
+        return viewport ? {
+          viewport: {
+            left: viewport.left,
+            right: viewport.right,
+            top: viewport.top,
+            bottom: viewport.bottom,
+          },
+          chips,
+        } : null;
+      }, PROXIMITY_PROBE_PREFIX);
+      assert.ok(geometry, "the proximity test owns a measured canvas viewport");
+      assert.equal(geometry.chips.length, 4, "all four usable shortcuts remain available");
+      assert.ok(
+        geometry.chips.every((chip) =>
+          chip.left >= geometry.viewport.left - 0.5 &&
+          chip.right <= geometry.viewport.right + 0.5 &&
+          chip.top >= geometry.viewport.top - 0.5 &&
+          chip.bottom <= geometry.viewport.bottom + 0.5
+        ),
+        `every complete chip stays inside the viewport: ${JSON.stringify(geometry)}`,
+      );
+
+      const focusedChip = await page.getByRole("button", { name: /Collision probe 1/ })
+        .elementHandle();
+      assert.ok(focusedChip, "the first proximity shortcut is focusable");
+      const currentTheme = await page.evaluate(
+        () => document.documentElement.dataset.theme ?? "system",
+      );
+      const nextTheme = currentTheme === "matrix" ? "dark" : "matrix";
+      let intercepted = false;
+      await page.route("**/api/redesign*", async (route) => {
+        if (intercepted || route.request().method() !== "GET") {
+          await route.continue();
+          return;
+        }
+        intercepted = true;
+        const response = await route.fetch();
+        const payload = await response.json();
+        const chosen = payload.theme_rows?.find((row) => row.name === nextTheme);
+        if (!chosen) throw new Error(`fixture has no '${nextTheme}' theme row`);
+        for (const row of payload.theme_rows) row.chosen = row === chosen;
+        reportPoll();
+        await pollGate;
+        await route.fulfill({ response, json: payload });
+      });
+
+      await focusedChip.focus();
+      await pollSeen;
+      assert.equal(
+        await focusedChip.evaluate((chip) => chip.isConnected && document.activeElement === chip),
+        true,
+        "focus remains on the exact chip while the ordinary poll is in flight",
+      );
+      releasePoll();
+      await page.waitForFunction(
+        (theme) => document.documentElement.dataset.theme === theme,
+        nextTheme,
+        { timeout: 5_000 },
+      );
+      await page.waitForTimeout(250);
+      assert.equal(
+        await focusedChip.evaluate((chip) => chip.isConnected && document.activeElement === chip),
+        true,
+        "the applied poll reuses the focused shortcut instead of dropping focus on the body",
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      releasePoll?.();
+      await page.unrouteAll({ behavior: "wait" });
+      if (!page.isClosed()) await page.close();
     }
   });
 

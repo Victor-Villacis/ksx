@@ -776,6 +776,10 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
         await page.waitForFunction(
           () => !document.querySelector(".forma-canvas-viewport.is-camera-animating"),
         );
+        // Proximity chips paint on a 150ms settle debounce. Wait for that
+        // real delayed layer so compact rescue chrome cannot pass merely
+        // because an intercepting chip has not arrived yet.
+        await page.locator(".rd-chip").first().waitFor({ state: "visible" });
 
         // Exercise the real canvas drag path and leave only a narrow shelf
         // below the board controls. The editor must flip above that shelf and
@@ -791,6 +795,13 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
             : null;
           const boardRect = board?.getBoundingClientRect();
           const hitRect = hit?.getBoundingClientRect();
+          const overlappingChips = rect
+            ? Array.from(document.querySelectorAll(".rd-chip")).filter((chip) => {
+              const chipRect = chip.getBoundingClientRect();
+              return chipRect.left < rect.right + 8 && chipRect.right > rect.left - 8 &&
+                chipRect.top < rect.bottom + 8 && chipRect.bottom > rect.top - 8;
+            }).length
+            : 0;
           return {
             boardTop: boardRect?.top,
             boardBottom: boardRect?.bottom,
@@ -814,6 +825,7 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
             anchorX: board?.getAttribute("data-widget-chrome-anchor-x"),
             anchorY: board?.getAttribute("data-widget-chrome-anchor-y"),
             hitClass: hit?.getAttribute("class"),
+            overlappingChips,
             handleOwnsHit: hit === handle || Boolean(hit && handle?.contains(hit)),
           };
         }, IPAC);
@@ -826,6 +838,11 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
           return viewport && policy ? viewport.bottom - policy.bottom - 12 : 0;
         }, IPAC);
         assert.ok(handleBox, "the physical board keeps its canvas move handle");
+        assert.equal(
+          beforeDrag.overlappingChips,
+          0,
+          `proximity navigation stays clear of the move handle: ${JSON.stringify(beforeDrag)}`,
+        );
         assert.equal(
           beforeDrag.handleOwnsHit,
           true,

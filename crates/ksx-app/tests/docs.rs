@@ -523,15 +523,36 @@ fn managed_real_qa_is_an_idle_identity_checked_process_pair() {
         probe.contains("GetNamedPipeServerProcessId(pipe.SafePipeHandle"),
         "pipe identity must come from the connected handle"
     );
+    let open_exact_start = probe
+        .find("function Open-KsxExactProcess")
+        .expect("runtime probe must expose exact receipt inspection");
+    let stop_gracefully_start = probe[open_exact_start..]
+        .find("function Stop-KsxDaemonGracefully")
+        .map(|offset| open_exact_start + offset)
+        .expect("exact receipt inspection must remain a bounded helper");
+    let open_exact = &probe[open_exact_start..stop_gracefully_start];
     assert!(
         probe.contains("ProcessQueryLimitedInformation | Synchronize")
             && probe.contains("ProcessTerminate | ProcessQueryLimitedInformation | Synchronize")
-            && probe.contains("StaleIdentityAsMissing")
-            && probe.contains("Test-KsxProcessNameProvesStaleIdentity")
-            && probe.contains("NativeErrorCode -eq 5")
+            && open_exact.contains("StaleIdentityAsMissing")
+            && open_exact.contains("Test-KsxProcessNameProvesStaleIdentity")
+            && open_exact.contains(
+                "$NativeProbeFailed = $Cause -is [System.ComponentModel.Win32Exception]",
+            )
+            && open_exact.contains("$StaleIdentityAsMissing -and $NativeProbeFailed -and")
             && teardown.contains("-StaleIdentityAsMissing")
             && start.contains("-StaleIdentityAsMissing"),
-        "receipt recovery must inspect identity before requesting termination and tolerate only proven-stale generations"
+        "receipt recovery must inspect identity before requesting termination and tolerate only native probe failures with an independently proven process-name mismatch"
+    );
+    let native_failure_tail = &open_exact[open_exact
+        .find("$NativeProbeFailed =")
+        .expect("exact receipt inspection must classify its native failure")..];
+    let native_failure_lines: Vec<_> = native_failure_tail.lines().map(str::trim).collect();
+    assert!(
+        native_failure_lines
+            .windows(3)
+            .any(|lines| lines == ["return $null", "}", "throw"]),
+        "an ambiguous native identity failure must be rethrown rather than treated as a stale receipt"
     );
     let try_open_start = probe
         .find("public static ExactProcess TryOpen")

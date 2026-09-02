@@ -69,6 +69,20 @@ try {
 }
 Assert-True $StrictMismatchRejected "Strict exact-process callers no longer reject mismatched identity."
 
+# The portable fallback is deliberately narrower than "a native probe failed":
+# an independently readable snapshot name must prove that the PID belongs to a
+# different executable. A matching or unreadable name remains ambiguous.
+Assert-True `
+    (-not (Test-KsxProcessNameProvesStaleIdentity `
+        -ProcessId $PID `
+        -ExpectedExecutable $CurrentExecutable)) `
+    "A matching process name was incorrectly accepted as proof of a stale receipt."
+Assert-True `
+    (Test-KsxProcessNameProvesStaleIdentity `
+        -ProcessId $PID `
+        -ExpectedExecutable $UnrelatedExecutable) `
+    "An unrelated process name no longer proves that a receipt generation is stale."
+
 # PID 4 is the protected Windows System process. Some hosts deny the limited
 # handle; others grant it but deny the image query; still others expose the
 # image. The system process snapshot safely exposes its non-path name in every

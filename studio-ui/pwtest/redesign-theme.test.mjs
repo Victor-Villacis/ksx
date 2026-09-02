@@ -283,6 +283,37 @@ describe("the redesign theme menu", () => {
     await page.close();
   });
 
+  test("Theme stays reachable beside the narrowest desktop Inspector", async () => {
+    const page = await openRedesign({ viewport: { width: 601, height: 900 } });
+    // This test owns the responsive collision, not key hit-testing at an
+    // extreme semantic zoom. Put the real drawer into its real open geometry
+    // deterministically, then exercise the Theme trigger without force.
+    await page.evaluate(() => {
+      const root = document.querySelector("[data-forma-island]");
+      const inspector = document.querySelector(".rd-inspector");
+      root?.classList.add("is-inspector-open");
+      if (inspector instanceof HTMLElement) inspector.hidden = false;
+    });
+    await page.waitForFunction(
+      () => document.querySelector(".rd-inspector")?.getAnimations().length === 0,
+    );
+    await page.locator(".rd-theme-home .rd-theme-sum").click();
+    const geometry = await page.evaluate(() => {
+      const menu = document.querySelector(".rd-thememenu")?.getBoundingClientRect();
+      const inspector = document.querySelector(".rd-inspector")?.getBoundingClientRect();
+      return menu && inspector
+        ? { menuLeft: menu.left, menuRight: menu.right, inspectorLeft: inspector.left }
+        : null;
+    });
+    assert.ok(geometry, "Theme or Inspector geometry is missing");
+    assert.ok(
+      geometry.menuLeft >= 0 && geometry.menuRight <= geometry.inspectorLeft,
+      `Theme menu is clipped or covered beside the Inspector: ${JSON.stringify(geometry)}`,
+    );
+    assert.deepEqual(page.ksxNoise, [], "narrow desktop Theme stays error-free");
+    await page.close();
+  });
+
   test("a served flash survives hydration, then its query is consumed", async () => {
     const message = "Studio theme updated.";
     const page = await openRedesign(
@@ -320,9 +351,11 @@ describe("the redesign theme menu", () => {
       viewport: { width: 390, height: 844 },
       hasTouch: true,
     });
-    await page.locator(".rd-setup-sum").click();
-    const box = await page.locator(".rd-theme-compact-sum").boundingBox();
-    assert.ok(box && box.height >= 40, `Theme target is ${box?.height ?? 0}px tall`);
+    const box = await page.locator(".rd-theme-home .rd-theme-sum").boundingBox();
+    assert.ok(
+      box && box.width >= 40 && box.height >= 40,
+      `Theme target is ${box?.width ?? 0}×${box?.height ?? 0}px`,
+    );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();
   });

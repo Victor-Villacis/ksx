@@ -17990,14 +17990,33 @@ a.nm-link {
    A native details, so the roster works with scripting off — which is why
    its summary is NOT an `.n-autobtn` (that class is scripting-only chrome,
    hidden until the wire stamps `.js`). */
-:is(.rd-themed, .rd-themed-compact) {
+.rd-themed {
   position: relative;
 }
 
-/* The compact copy lives inside Setup so the 390px lifecycle rail never has
-   to trade away Save/Apply/Stop for appearance preferences. */
-.rd-theme-compact-home {
-  display: none;
+.rd-theme-home {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 7;
+  transition: right 160ms ease-out;
+}
+
+.rd-theme-home:has(.rd-themed[open]) {
+  z-index: 36;
+}
+
+/* The desktop Inspector owns the right edge. Move the global Theme trigger
+   beside it while the drawer is open instead of leaving a closed trigger
+   underneath the drawer or raising that trigger through the drawer. */
+@media (min-width: 601px) {
+  .rd.is-inspector-open .rd-theme-home {
+    right: 340px;
+  }
+
+  .rd.is-inspector-open .rd-thememenu {
+    width: min(300px, calc(100vw - 374px));
+  }
 }
 
 .rd-utility-compact-home {
@@ -18153,14 +18172,18 @@ button.rd-utility-action {
 
 /* The Inspector is fixed at layer 35. Lift only the open disclosure above it
    so the resting topbar does not become an unnecessary stacking context. */
-:is(.rd-themed, .rd-themed-compact)[open] {
+.rd-themed[open] {
   /* The disclosure must remain above the Inspector while it is open, but
      below the modal layer. */
   z-index: 36;
 }
 
-:is(.rd-theme-sum, .rd-theme-compact-sum) {
-  display: inline-block;
+.rd-theme-sum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  min-height: 34px;
   padding: 5px 11px;
   border: 1px solid var(--n-line);
   border-radius: 8px;
@@ -18173,22 +18196,22 @@ button.rd-utility-action {
   user-select: none;
 }
 
-:is(.rd-theme-sum, .rd-theme-compact-sum)::-webkit-details-marker {
+.rd-theme-sum::-webkit-details-marker {
   display: none;
 }
 
-:is(.rd-theme-sum, .rd-theme-compact-sum):hover,
-:is(.rd-themed, .rd-themed-compact)[open] > :is(.rd-theme-sum, .rd-theme-compact-sum) {
+.rd-theme-sum:hover,
+.rd-themed[open] > .rd-theme-sum {
   border-color: var(--n-accent-line);
   color: var(--n-accent-2);
 }
 
-:is(.rd-thememenu, .rd-thememenu-compact) {
+.rd-thememenu {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
   z-index: 12;
-  width: 300px;
+  width: min(300px, calc(100vw - 16px));
   padding: 10px 12px 12px;
   border: 1px solid var(--n-line);
   border-radius: 12px;
@@ -19297,19 +19320,32 @@ button.rd-utility-action {
   }
 }
 
-/* Product-critical verbs own the rail. Theme and operational tools already
-   have complete native copies in Setup; keep those copies primary until a
-   1440 px desktop can carry the direct triggers without clipping a live
-   status or action. */
+/* Product-critical verbs own the labelled rail. Theme remains a global
+   top-level preference and collapses to one icon; operational tools keep their
+   compact Setup fallback until the rail can carry their full trigger. */
 @media (width < 1440px) {
-  .rd-theme-rail-home,
   .rd-utility-rail-home {
     display: none;
   }
 
-  .rd-theme-compact-home,
   .rd-utility-compact-home {
     display: block;
+  }
+
+  .rd-theme-sum {
+    width: 36px;
+    min-width: 36px;
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  .rd-theme-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 }
 
@@ -19383,10 +19419,6 @@ button.rd-utility-action {
     font-size: var(--fs-xs);
   }
 
-  .rd-theme-compact-home {
-    width: min(100%, 300px);
-  }
-
   .rd-utility-compact-home .rd-utilityd {
     width: 100%;
   }
@@ -19396,23 +19428,6 @@ button.rd-utility-action {
   }
 
   .rd-utility-compact-home .rd-utility-menu {
-    position: static;
-    width: 100%;
-    margin-top: var(--sp-2);
-    box-shadow: none;
-  }
-
-  .rd-theme-compact-home .rd-themed-compact {
-    width: 100%;
-  }
-
-  .rd-theme-compact-sum {
-    display: inline-flex;
-    align-items: center;
-    min-height: 34px;
-  }
-
-  .rd-theme-compact-home .rd-thememenu-compact {
     position: static;
     width: 100%;
     margin-top: var(--sp-2);
@@ -19782,6 +19797,7 @@ button.rd-utility-action {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .rd-theme-home,
   .rd-setup-sum .rd-caret,
   .rd-live-state::before {
     transition: none;
@@ -23859,7 +23875,9 @@ form.rd-undochip .n-undo-btn {
 }
 
 @media (pointer: coarse) {
-  :is(.rd-theme-sum, .rd-theme-compact-sum) {
+  .rd-theme-sum {
+    width: 40px;
+    min-width: 40px;
     min-height: 40px;
   }
 

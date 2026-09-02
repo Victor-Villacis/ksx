@@ -436,6 +436,14 @@ pub(crate) fn device_row(row: &NocturneDeviceRow) -> SlotValue {
             "connection_label".to_owned(),
             SlotValue::Text(row.connection_label.clone()),
         ),
+        (
+            "connection_badge".to_owned(),
+            SlotValue::Text(row.connection_badge.clone()),
+        ),
+        (
+            "connection_state".to_owned(),
+            SlotValue::Text(row.connection_state.clone()),
+        ),
         ("selector".to_owned(), SlotValue::Text(row.selector.clone())),
         ("alias".to_owned(), SlotValue::Text(row.alias.clone())),
         ("label".to_owned(), SlotValue::Text(row.label.clone())),

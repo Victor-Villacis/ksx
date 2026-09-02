@@ -6,6 +6,9 @@ export interface CanvasItemOptions {
   displayName: string;
   preferredWidth: number;
   minHeight: number;
+  /** Let mounted content own the live canvas height. Persisted height is
+   * ignored while position, width, z-order and manual scale still restore. */
+  intrinsicHeight?: boolean;
   resizable?: boolean;
   runtimeHost?: CanvasRuntimeHost;
   content?: Node;
@@ -36,6 +39,7 @@ export function createCanvasItem(options: CanvasItemOptions): HTMLElement {
   item.dataset.widgetName = options.displayName;
   item.dataset.canvasPreferredWidth = String(options.preferredWidth);
   item.dataset.canvasMinHeight = String(options.minHeight);
+  item.dataset.canvasIntrinsicHeight = String(options.intrinsicHeight === true);
   item.dataset.canvasResizable = String(options.resizable === true);
   item.style.setProperty("--widget-preferred-width", `${options.preferredWidth}px`);
   item.style.setProperty("--widget-min-height", `${options.minHeight}px`);

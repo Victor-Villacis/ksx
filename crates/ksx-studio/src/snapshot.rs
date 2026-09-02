@@ -2043,6 +2043,8 @@ impl RedesignDeviceRows {
                 staged_revision: ksx_api::staged_device_revision(device),
                 instance_id: String::new(),
                 connection_label: device_connection_label(&device.selector),
+                connection_badge: "Disconnected".to_owned(),
+                connection_state: "attention".to_owned(),
                 alias: device.alias.clone(),
                 label: name,
                 aria_current: "true".to_owned(),
@@ -2165,6 +2167,8 @@ impl RedesignDeviceRows {
                     terminal_count: b.terminal_count,
                     role: b.role.code().to_owned(),
                     connection_label: device_connection_label(&selector),
+                    connection_badge: "Connected".to_owned(),
+                    connection_state: "connected".to_owned(),
                     instance_id: proven_device_instance(scan, b).unwrap_or_default(),
                     alias: alias_for(&selector, &b.alias_hint),
                     selector,
@@ -3253,6 +3257,13 @@ pub struct NocturneDeviceRow {
     /// derive served copy (and is therefore present in SSR HTML).
     #[serde(default)]
     pub connection_label: String,
+    /// Literal connection badge copied into the initial picker row. Keeping
+    /// its text and tone on the wire prevents hydration from replacing the
+    /// server's generic placeholder after first paint.
+    #[serde(default)]
+    pub connection_badge: String,
+    #[serde(default)]
+    pub connection_state: String,
     /// Exact Windows instance id from the scan row. Mapping/capture actions
     /// return this unchanged; a selector is deliberately not parsed back into
     /// a machine path.

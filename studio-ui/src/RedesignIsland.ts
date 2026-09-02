@@ -55,7 +55,6 @@ import {
 } from "./redesign-macro-editor";
 import {
   closeRedesignToolsDisclosure,
-  REDESIGN_RAIL_PREFERENCES_MEDIA,
   redesignCompactToolsDisclosure,
   redesignToolsDisclosure,
   wireRedesignToolsDisclosures,
@@ -134,6 +133,9 @@ export interface RdDeviceRowView {
   instance_id?: string;
   /** Server-authored short identity for disambiguating same-name boards. */
   connection_label: string;
+  /** Server-authored connection badge text and visual tone. */
+  connection_badge: string;
+  connection_state: string;
   alias: string;
   label: string;
   aria_current: string;
@@ -424,7 +426,6 @@ const [rdEnvCompactText, setRdEnvCompactText] = createSignal("UNKNOWN");
 const [rdEnvAccessibleText, setRdEnvAccessibleText] = createSignal("Environment unknown");
 const [rdStudioVersion, setRdStudioVersion] = createSignal("");
 const [rdThemeRows, setRdThemeRows] = createSignal<RdRenderedChoiceRow[]>([]);
-const [rdCompactThemeRows, setRdCompactThemeRows] = createSignal<RdRenderedChoiceRow[]>([]);
 const [rdDevKb, setRdDevKb] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevEnc, setRdDevEnc] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevExp, setRdDevExp] = createSignal<RdDeviceRowView[]>([]);
@@ -1295,7 +1296,6 @@ export function applyRedesign(v: RedesignPayload): void {
     chosen: row.chosen ? "true" : "false",
   }));
   setRdThemeRows(renderedThemeRows);
-  setRdCompactThemeRows(renderedThemeRows);
   // The ONE verb whose effect lives outside this island's tree (the
   // nocturne lesson, carried over with the rows). Every other form's outcome
   // is repainted from this payload, but the theme is an attribute on <html>
@@ -2328,41 +2328,12 @@ function closeThemeMenu(restoreFocus = false): boolean {
 
 const themeDisclosureRoots = new WeakSet<HTMLElement>();
 
-/** The rail and Setup copies are one Theme control. Close an outgoing copy
- * before its breakpoint hides it, then restore focus to the entry point that
- * is actually rendered in the destination tier. */
+/** Theme has one stable top-level home at every width. Native details keeps
+ * the preference available before the client wire loads; the island only
+ * coordinates dismissal with peer overlays. */
 function wireThemeDisclosures(root: HTMLElement): void {
   if (themeDisclosureRoots.has(root)) return;
   themeDisclosureRoots.add(root);
-  let lastFocusedDisclosure: HTMLDetailsElement | null = null;
-  root.ownerDocument.addEventListener(
-    "focusin",
-    (event) => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const owner = target.closest<HTMLDetailsElement>("[data-rd-theme-menu]");
-      if (owner) {
-        lastFocusedDisclosure = owner;
-      } else if (target !== root.ownerDocument.body &&
-                 target !== root.ownerDocument.documentElement) {
-        // Hiding a focused disclosure can make Chromium focus <body> before
-        // MediaQueryList dispatches. Preserve that one transient handoff;
-        // ordinary pointer movement was already cleared on pointerdown.
-        lastFocusedDisclosure = null;
-      }
-    },
-    true,
-  );
-  root.ownerDocument.addEventListener(
-    "pointerdown",
-    (event) => {
-      const target = event.target;
-      if (!(target instanceof Element) || !target.closest("[data-rd-theme-menu]")) {
-        lastFocusedDisclosure = null;
-      }
-    },
-    true,
-  );
   root.addEventListener(
     "toggle",
     (event) => {
@@ -2377,22 +2348,6 @@ function wireThemeDisclosures(root: HTMLElement): void {
     },
     true,
   );
-  const compact = window.matchMedia(REDESIGN_RAIL_PREFERENCES_MEDIA);
-  compact.addEventListener("change", (event) => {
-    const hadOpenDisclosure = Boolean(root.querySelector("[data-rd-theme-menu][open]"));
-    const active = document.activeElement;
-    const ownedFocus = active instanceof Element && Boolean(active.closest("[data-rd-theme-menu]"));
-    const rememberedFocus = Boolean(lastFocusedDisclosure?.isConnected);
-    lastFocusedDisclosure = null;
-    if (hadOpenDisclosure) closeThemeMenu();
-    if (!ownedFocus && !rememberedFocus) return;
-    const target = event.matches
-      ? root.querySelector<HTMLElement>(".rd-setupd > .rd-setup-sum")
-      : root.querySelector<HTMLElement>(
-        ".rd-theme-rail-home [data-rd-theme-menu] > .rd-theme-sum",
-      );
-    target?.focus({ preventScroll: true });
-  });
 }
 
 function setSheet(open: boolean): void {
@@ -3397,9 +3352,9 @@ const KEYBOARD_MAPPING_READY_TITLE =
   "Bindings on this exact keyboard can be edited independently; the same key on another keyboard is a different signal.";
 const DEVICE_CARD_MIN_HEIGHT = 220;
 const KEYBOARD_DEVICE_WIDTH = 980;
-// One physical keyboard is the full interactive board itself. The identity is
-// carried by its board header and canvas chrome, not a second summary card.
-const KEYBOARD_DEVICE_MIN_HEIGHT = 480;
+// One physical keyboard is the full interactive board itself. This is only its
+// pre-layout safety floor; the board's content owns the measured live height.
+const KEYBOARD_DEVICE_MIN_HEIGHT = 320;
 const DEVICE_CARD_ROW_STRIDE = DEVICE_CARD_MIN_HEIGHT + CANVAS_FRESH_PLACEMENT_GAP;
 
 function deviceCardPurpose(row: RdDeviceRowView): string {
@@ -3657,6 +3612,7 @@ function mountDeviceWidget(
     displayName: deviceCanvasLabel(row),
     preferredWidth,
     minHeight,
+    intrinsicHeight: row.role === "keyboard",
     content,
     document,
   });
@@ -3713,13 +3669,14 @@ function mountDeviceWidget(
       ? {
           ...savedGeometry,
           width: Math.max(KEYBOARD_DEVICE_WIDTH, savedGeometry.width),
-          height: Math.max(KEYBOARD_DEVICE_MIN_HEIGHT, savedGeometry.height),
+          // Old builds persisted the oversized 480–640px hull. Intrinsic
+          // keyboards restore arrangement, not that obsolete height.
+          height: KEYBOARD_DEVICE_MIN_HEIGHT,
         }
       : savedGeometry;
     const keyboardGeometryExpanded = Boolean(
       savedGeometry && row.role === "keyboard" &&
-        (savedGeometry.width < KEYBOARD_DEVICE_WIDTH ||
-          savedGeometry.height < KEYBOARD_DEVICE_MIN_HEIGHT),
+        savedGeometry.width < KEYBOARD_DEVICE_WIDTH,
     );
     canvas.mountItem(
       item,
@@ -4166,10 +4123,9 @@ function claimPendingLegacyKeyboardGeometry(item: HTMLElement | null): void {
   const normalized = {
     ...legacy,
     width: Math.max(KEYBOARD_DEVICE_WIDTH, legacy.width),
-    height: Math.max(KEYBOARD_DEVICE_MIN_HEIGHT, legacy.height),
+    height: KEYBOARD_DEVICE_MIN_HEIGHT,
   };
-  const expanded = legacy.width < KEYBOARD_DEVICE_WIDTH ||
-    legacy.height < KEYBOARD_DEVICE_MIN_HEIGHT;
+  const expanded = legacy.width < KEYBOARD_DEVICE_WIDTH;
   const current = canvas.getItemState(item);
   const spawnX = Number(item.dataset.legacyKeyboardSpawnX);
   const spawnY = Number(item.dataset.legacyKeyboardSpawnY);
@@ -5707,12 +5663,9 @@ export function redesignWire(root: HTMLElement): void {
 
 // ── The island ──────────────────────────────────────────────────────────────
 
-/** The same native Theme disclosure has two responsive homes: the desktop
- * rail and the compact Setup panel. Both render the server-owned rows and
- * ordinary POST forms, so narrow screens do not trade product access for fit
- * and the no-script path remains complete. Distinct presentation classes keep
- * the long-standing desktop selectors singular; data-rd-theme-* is the shared
- * behavior contract. */
+/** One native, server-complete Theme disclosure in global app chrome. Theme
+ * changes presentation only; setup progress and device recovery remain a
+ * separate operational concern. */
 function redesignThemeDisclosure() {
   return h(
     "details",
@@ -5725,7 +5678,8 @@ function redesignThemeDisclosure() {
         "aria-label": "Choose Studio theme",
         "data-rd-theme-summary": "",
       },
-      "◐ Theme",
+      h("span", { class: "rd-theme-icon", "aria-hidden": "true" }, "◐"),
+      h("span", { class: "rd-theme-label" }, "Theme"),
     ),
     h(
       "div",
@@ -5770,31 +5724,27 @@ function redesignThemeDisclosure() {
   );
 }
 
-function redesignCompactThemeDisclosure() {
+/** Session-wide input policy belongs to the canvas chrome, not to any one
+ * physical keyboard. Rendering it in its final host keeps first paint and
+ * hydration structurally identical; no client-side DOM relocation is needed. */
+function redesignSourceControls() {
   return h(
     "details",
-    { class: "rd-themed-compact", "data-rd-theme-menu": "" },
+    {
+      class: "rd-boardpick rd-capture",
+      "data-rd-source-controls": "",
+    },
     h(
       "summary",
-      {
-        class: "rd-theme-compact-sum",
-        title: "How the Studio looks",
-        "aria-label": "Choose Studio theme",
-        "data-rd-theme-summary": "",
-      },
-      "◐ Theme",
+      { class: "n-autobtn rd-boardpick-sum" },
+      "While playing",
     ),
     h(
       "div",
-      { class: "rd-thememenu-compact" },
-      h("div", { class: "n-kick-row" }, h("span", { class: "n-kick" }, "How the Studio looks")),
-      h(
-        "p",
-        { class: "n-devnote" },
-        "Pages follow the operating system's light or dark choice unless you pick one here.",
-      ),
+      { class: "rd-boardpick-pop" },
+      h("p", { class: "n-devnote" }, () => rdCaptureNote()),
       createList(
-        () => rdCompactThemeRows(),
+        () => rdCaptureRows(),
         (r) => r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
         (r) =>
           h(
@@ -5802,17 +5752,13 @@ function redesignCompactThemeDisclosure() {
             {
               class: "n-modeform",
               method: "post",
-              action: "/redesign/theme",
-              "data-rd-form": "theme",
+              action: "/redesign/blocking",
+              "data-rd-form": "blocking",
             },
-            h("input", { type: "hidden", name: "theme", value: r.name }),
+            h("input", { type: "hidden", name: "blocking", value: r.name }),
             h(
               "button",
-              {
-                type: "submit",
-                class: r.cls,
-                "aria-current": r.chosen,
-              },
+              { type: "submit", class: r.cls, "aria-current": r.chosen },
               h("span", { class: "n-radio-dot" }),
               h(
                 "span",
@@ -5911,11 +5857,6 @@ export function RedesignIsland() {
                   },
                   "v",
                   () => rdStudioVersion(),
-                ),
-                h(
-                  "div",
-                  { class: "rd-theme-compact-home" },
-                  redesignCompactThemeDisclosure(),
                 ),
               ),
               h(
@@ -6466,14 +6407,6 @@ export function RedesignIsland() {
             },
             "⌨",
           ),
-          // The desktop home of the native Theme disclosure. Compact widths
-          // render the same forms inside Setup, where they remain reachable
-          // without competing with lifecycle verbs for rail width.
-          h(
-            "div",
-            { class: "rd-theme-rail-home" },
-            redesignThemeDisclosure(),
-          ),
           h(
             "div",
             { class: "rd-utility-rail-home" },
@@ -6803,7 +6736,11 @@ export function RedesignIsland() {
                       // above — the compiler drops an element that shares a
                       // parent with a dynamic text, and the parity gate is
                       // what caught the chip existing only after hydration.
-                      h("span", { class: "rd-dev-connectedchip" }, "Connected"),
+                      h(
+                        "span",
+                        { class: "rd-dev-connectedchip", "data-state": r.connection_state },
+                        r.connection_badge,
+                      ),
                       h("span", { class: "rd-dev-stagedchip" }, "Mapping controls ready"),
                       h(
                         "span",
@@ -6860,8 +6797,8 @@ export function RedesignIsland() {
                       // what caught the chip existing only after hydration.
                       h(
                         "span",
-                        { class: "rd-dev-connectedchip" },
-                        "Connected",
+                        { class: "rd-dev-connectedchip", "data-state": r.connection_state },
+                        r.connection_badge,
                       ),
                       h(
                         "span",
@@ -6928,8 +6865,8 @@ export function RedesignIsland() {
                       // what caught the chip existing only after hydration.
                       h(
                         "span",
-                        { class: "rd-dev-connectedchip" },
-                        "Device status",
+                        { class: "rd-dev-connectedchip", "data-state": r.connection_state },
+                        r.connection_badge,
                       ),
                       h(
                         "span",
@@ -7174,6 +7111,14 @@ export function RedesignIsland() {
           // ── The tool cluster (design handoff §7): select and hand ───────
           // Off-screen proximity chips: client-populated, camera-settle paced.
           h("div", { class: "rd-chips", "data-client-subtree": "" }),
+          // Global appearance is independent of Setup and lifecycle. Its one
+          // stable disclosure floats at the canvas edge, opposite the mode
+          // tools, so narrow rails never trade a product verb for Theme.
+          h(
+            "div",
+            { class: "rd-theme-home" },
+            redesignThemeDisclosure(),
+          ),
           // The controller silhouettes' visible credit — the vendored art's
           // MIT terms travel with the art onto every page that draws it (the
           // /pads footer's exact line). A corner OVERLAY, deliberately not in
@@ -7219,11 +7164,15 @@ export function RedesignIsland() {
               "✋",
             ),
           ),
-          h("div", {
-            class: "rd-global-source-controls-host",
-            "data-rd-global-source-controls-host": "",
-            "data-client-canvas": "",
-          }),
+          h(
+            "div",
+            {
+              class: "rd-global-source-controls-host",
+              "data-rd-global-source-controls-host": "",
+              "data-client-canvas": "",
+            },
+            redesignSourceControls(),
+          ),
           h(
             "div",
             {
@@ -7588,54 +7537,6 @@ export function RedesignIsland() {
                     ),
                   ),
                   h("p", { class: "n-devnote" }, () => rdKbNote()),
-                ),
-                // Source policy is session-wide. It begins beside the hidden
-                // reactive blueprint for SSR parity, then moves once into the
-                // global canvas-policy host; it never implies one exclusive
-                // physical source.
-                h(
-                  "details",
-                  {
-                    class: "rd-boardpick rd-capture",
-                    "data-rd-source-controls": "",
-                  },
-                  h(
-                    "summary",
-                    { class: "n-autobtn rd-boardpick-sum" },
-                    "While playing",
-                  ),
-                  h(
-                    "div",
-                    { class: "rd-boardpick-pop" },
-                    h("p", { class: "n-devnote" }, () => rdCaptureNote()),
-                    createList(
-                      () => rdCaptureRows(),
-                      (r) =>
-                        r.name + "|" + r.title + "|" + r.detail + "|" + r.cls + "|" + r.chosen,
-                      (r) =>
-                        h(
-                          "form",
-                          {
-                            class: "n-modeform",
-                            method: "post",
-                            action: "/redesign/blocking",
-                            "data-rd-form": "blocking",
-                          },
-                          h("input", { type: "hidden", name: "blocking", value: r.name }),
-                          h(
-                            "button",
-                            { type: "submit", class: r.cls, "aria-current": r.chosen },
-                            h("span", { class: "n-radio-dot" }),
-                            h(
-                              "span",
-                              { class: "n-radio-txt" },
-                              h("span", { class: "n-radio-title" }, r.title),
-                              h("span", { class: "n-radio-detail" }, r.detail),
-                            ),
-                          ),
-                        ),
-                    ),
-                  ),
                 ),
               ),
             ),

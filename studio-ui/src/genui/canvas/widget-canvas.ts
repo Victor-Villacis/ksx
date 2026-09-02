@@ -621,11 +621,25 @@ export class WidgetCanvas {
             !this.#runtimeHosts.has(item.dataset.instanceId ?? "")
           ? entry.target === item
           : this.#runtimeAdapter.ownsEventTarget(entry.target);
-        if (heightSource && height > 0 && item.dataset.canvasHeight !== nextHeight) {
+        // Parking intentionally replaces the runtime host's real layout with
+        // its cheap contain-intrinsic-size fallback. That is a rendering
+        // optimisation, not new canvas geometry: accepting it would move the
+        // minimap, fit bounds, collision hull and persisted height simply
+        // because the camera panned away. The live measurement will be
+        // observed normally as soon as the item leaves parked state.
+        const intrinsicHeightIsParked = item.dataset.canvasIntrinsicHeight === "true" &&
+          item.dataset.attentionState === "parked";
+        if (
+          heightSource && !intrinsicHeightIsParked && height > 0 &&
+          item.dataset.canvasHeight !== nextHeight
+        ) {
           item.dataset.canvasHeight = nextHeight;
-          item.style.minHeight = `${height}px`;
+          if (item.dataset.canvasIntrinsicHeight !== "true") {
+            item.style.minHeight = `${height}px`;
+          }
           changed = itemChanged = true;
         }
+        if (itemChanged) this.#reclampItemPosition(item);
         if (itemChanged && item.dataset.instanceId === this.#cameraFramingTarget?.itemId) {
           framedItemChanged = true;
         }
@@ -2201,15 +2215,18 @@ export class WidgetCanvas {
       1200,
     );
     const resizable = item.dataset.canvasResizable === "true";
+    const intrinsicHeight = item.dataset.canvasIntrinsicHeight === "true";
     return {
       x: finiteNumber(restored?.x, 110 + (index % 3) * 520),
       y: finiteNumber(restored?.y, 100 + Math.floor(index / 3) * 440 + (index % 2) * 36),
       width: resizable
         ? clamp(finiteNumber(restored?.width, preferredWidth), 280, 1600)
         : preferredWidth,
-      height: resizable
-        ? clamp(finiteNumber(restored?.height, minHeight), 220, 920)
-        : clamp(finiteNumber(restored?.height, minHeight), minHeight, 1600),
+      height: intrinsicHeight
+        ? minHeight
+        : resizable
+          ? clamp(finiteNumber(restored?.height, minHeight), 220, 920)
+          : clamp(finiteNumber(restored?.height, minHeight), minHeight, 1600),
       z: Math.max(1, finiteNumber(restored?.z, this.#topZ + 1)),
       manualScale: clamp(
         finiteNumber(restored?.manualScale, 1),
@@ -2229,14 +2246,43 @@ export class WidgetCanvas {
     item.dataset.canvasX = String(x);
     item.dataset.canvasY = String(y);
     item.dataset.canvasWidth = String(Math.round(state.width));
-    item.dataset.canvasHeight = String(Math.round(state.height));
     item.dataset.canvasZ = String(Math.round(state.z));
     item.dataset.canvasManualScale = String(state.manualScale);
     item.style.left = `${x}px`;
     item.style.top = `${y}px`;
     item.style.width = `${state.width}px`;
-    item.style.minHeight = `${state.height}px`;
+    if (item.dataset.canvasIntrinsicHeight === "true") {
+      // Clear any persisted/pre-migration floor before reading layout. This
+      // one synchronous measurement is deliberately limited to intrinsic
+      // widgets; it makes fit, minimap, marquee and persistence truthful on
+      // the first frame, while ResizeObserver owns later grow/shrink updates.
+      item.style.removeProperty("min-height");
+      const measuredHeight = item.offsetHeight;
+      item.dataset.canvasHeight = String(Math.round(
+        measuredHeight > 0 ? measuredHeight : state.height,
+      ));
+    } else {
+      item.dataset.canvasHeight = String(Math.round(state.height));
+      item.style.minHeight = `${state.height}px`;
+    }
     item.style.zIndex = String(state.z);
+    // Intrinsic content may have replaced the provisional mount height above.
+    // Re-run the same world-bound rule with that measured box so a board
+    // restored at the old bottom edge cannot grow beyond the reachable world.
+    this.#reclampItemPosition(item);
+  }
+
+  #reclampItemPosition(item: HTMLElement): boolean {
+    const state = this.getItemState(item);
+    const inside = this.#clampToWorld(state, state.x, state.y);
+    const x = Math.round(inside.x * 1000) / 1000;
+    const y = Math.round(inside.y * 1000) / 1000;
+    if (x === state.x && y === state.y) return false;
+    item.dataset.canvasX = String(x);
+    item.dataset.canvasY = String(y);
+    item.style.left = `${x}px`;
+    item.style.top = `${y}px`;
+    return true;
   }
 
   #moveItem(item: HTMLElement, x: number, y: number): void {

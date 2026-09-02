@@ -354,7 +354,6 @@ pub(crate) fn payload(input: PayloadInput<'_>) -> RedesignPayload {
 /// device picker's four tiers. The names are the compiler's stable list-slot
 /// convention and are asserted against the embedded IR below.
 const LIST_SLOT_THEME_ROWS: &str = "list:rdThemeRows:array";
-const LIST_SLOT_COMPACT_THEME_ROWS: &str = "list:rdCompactThemeRows:array";
 const LIST_SLOT_DEV_KB: &str = "list:rdDevKb:array";
 const LIST_SLOT_DEV_ENC: &str = "list:rdDevEnc:array";
 const LIST_SLOT_DEV_EXP: &str = "list:rdDevExp:array";
@@ -614,22 +613,22 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
     })
 }
 
-/// Populate every server-injected slot: the scalars, plus the theme-rows
-/// lists. Theme deliberately has two responsive homes backed by distinct list
-/// signals—the FMIR list renderer consumes one array per mount—so both receive
-/// the same authoritative roster. Further lists and shows join as the
-/// transplants arrive.
+/// Populate every server-injected slot: the scalars, plus the theme rows.
+/// Theme has one stable top-level home at every width, so one authoritative
+/// roster is sufficient. Further lists and shows join as the transplants
+/// arrive.
 fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>) -> SlotData {
     let scalars = scalar_slots(payload, flash).to_string();
     let mut slots = SlotData::from_json(&scalars, module)
         .unwrap_or_else(|_| SlotData::new_from_defaults(&module.slots));
-    for name in [LIST_SLOT_THEME_ROWS, LIST_SLOT_COMPACT_THEME_ROWS] {
-        if let Some(id) = named_slot_ids(module, name).into_iter().next() {
-            slots.set(
-                id,
-                SlotValue::array(payload.theme_rows.iter().map(mode_row).collect()),
-            );
-        }
+    if let Some(id) = named_slot_ids(module, LIST_SLOT_THEME_ROWS)
+        .into_iter()
+        .next()
+    {
+        slots.set(
+            id,
+            SlotValue::array(payload.theme_rows.iter().map(mode_row).collect()),
+        );
     }
     let dev = &payload.devices;
     for (name, value) in [
@@ -1767,8 +1766,7 @@ mod tests {
         );
     }
 
-    /// **Both responsive theme homes offer every theme, and every row is
-    /// PAINTED.** The
+    /// **The global theme menu offers every theme, and every row is PAINTED.** The
     /// nocturne picker's own regression, applied here the day the rows were
     /// transplanted: between "the verb round-trips" and "the action string
     /// appears" once sat a picker whose unchosen rows a stale `pill-none`
@@ -1777,7 +1775,7 @@ mod tests {
     /// vocabulary asserted here is the surviving one — `n-radio`, never
     /// `pill` — and exactly one row may claim to be current.
     #[test]
-    fn redesign_paints_every_theme_row_in_both_responsive_homes() {
+    fn redesign_paints_every_theme_row_in_its_global_home() {
         let page = EmbeddedPage::load("/redesign").unwrap();
         let html = render_redesign(&page, &fixture_payload(), None).html;
 
@@ -1806,51 +1804,52 @@ mod tests {
                 .collect()
         }
 
-        // System + every theme in the generated roster. The desktop rail and
-        // compact Setup panel are separate no-script homes; responsive CSS
-        // exposes exactly one, but each must be independently complete.
+        // System + every theme in the generated roster. One stable top-level
+        // disclosure survives every breakpoint and remains complete without
+        // scripting.
         let expected = 1 + crate::theme_tokens::THEMES.len();
-        for (home, class) in [
-            ("desktop rail", "rd-themed"),
-            ("compact Setup panel", "rd-themed-compact"),
-        ] {
-            let forms = theme_forms(disclosure(&html, class));
-            assert_eq!(
-                forms.len(),
-                expected,
-                "the {home} serves {} theme forms, not the {expected} the roster has",
-                forms.len(),
-            );
-            for want in
-                std::iter::once("system").chain(crate::theme_tokens::THEMES.iter().map(|t| t.id))
-            {
-                let hidden = format!(r#"name="theme" value="{want}""#);
-                assert!(
-                    forms.iter().any(|form| form.contains(&hidden)),
-                    "the {home} has no theme form that posts {want:?}",
-                );
-            }
-            for form in &forms {
-                assert!(
-                    !form.contains("pill"),
-                    "a {home} theme row's submit button carries a `pill` class; that \
-                     vocabulary hides rows (see snapshot.rs theme_rows): {form}",
-                );
-                assert!(
-                    form.contains("n-radio"),
-                    "a {home} theme row's submit button is not an `n-radio`; only \
-                     `.n-modeform button.n-radio` is laid out at all: {form}",
-                );
-            }
-            let marked = forms
-                .iter()
-                .filter(|form| form.contains("n-radio on"))
-                .count();
-            assert_eq!(
-                marked, 1,
-                "{marked} theme rows claim to be current in the {home}",
+        let home = "global Theme menu";
+        let forms = theme_forms(disclosure(&html, "rd-themed"));
+        assert_eq!(
+            forms.len(),
+            expected,
+            "the {home} serves {} theme forms, not the {expected} the roster has",
+            forms.len(),
+        );
+        assert_eq!(
+            html.matches(r#"data-rd-theme-menu"#).count(),
+            1,
+            "Theme must have exactly one top-level disclosure",
+        );
+        for want in
+            std::iter::once("system").chain(crate::theme_tokens::THEMES.iter().map(|t| t.id))
+        {
+            let hidden = format!(r#"name="theme" value="{want}""#);
+            assert!(
+                forms.iter().any(|form| form.contains(&hidden)),
+                "the {home} has no theme form that posts {want:?}",
             );
         }
+        for form in &forms {
+            assert!(
+                !form.contains("pill"),
+                "a {home} theme row's submit button carries a `pill` class; that \
+                 vocabulary hides rows (see snapshot.rs theme_rows): {form}",
+            );
+            assert!(
+                form.contains("n-radio"),
+                "a {home} theme row's submit button is not an `n-radio`; only \
+                 `.n-modeform button.n-radio` is laid out at all: {form}",
+            );
+        }
+        let marked = forms
+            .iter()
+            .filter(|form| form.contains("n-radio on"))
+            .count();
+        assert_eq!(
+            marked, 1,
+            "{marked} theme rows claim to be current in the {home}",
+        );
         // Every theme speaks its own sentence — Dark and Matrix share a
         // scheme, so a derived sentence once made two rows word-identical.
         for meta in crate::theme_tokens::THEMES {
@@ -2000,7 +1999,6 @@ mod tests {
         }
         for signal in [
             "rdThemeRows",
-            "rdCompactThemeRows",
             "rdDevKb",
             "rdDevEnc",
             "rdDevExp",

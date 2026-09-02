@@ -476,9 +476,19 @@ async function assertLifecycleRail(page, width) {
   }
 
   assert.equal(
-    await page.locator(".rd-theme-rail-home .rd-themed").isVisible(),
-    width >= RAIL_PREFERENCES_MIN,
-    `${width}px desktop Theme trigger should follow the labeled rail tier`,
+    await page.locator(".rd-theme-home .rd-themed").isVisible(),
+    true,
+    `${width}px global Theme trigger is hidden`,
+  );
+  assert.equal(
+    await page.locator("[data-rd-theme-menu]").count(),
+    1,
+    `${width}px workbench rendered duplicate Theme controls`,
+  );
+  assert.equal(
+    await page.locator(".rd-setupd [data-rd-theme-menu]").count(),
+    0,
+    `${width}px Setup incorrectly owns the Theme picker`,
   );
   assert.equal(
     await page.locator(".rd-utility-rail-home [data-rd-tools-menu]").isVisible(),
@@ -515,36 +525,17 @@ async function assertLifecycleRail(page, width) {
   await assertTopRailGeometry(page, width);
 }
 
-async function assertCompactThemeKeyboard(page, width) {
+async function assertGlobalThemeKeyboard(page, width) {
   await page.setViewportSize({ width, height: 900 });
-  const setup = page.locator(".rd-setupd");
-  const setupSummary = setup.locator(":scope > .rd-setup-sum");
-  if (await setup.getAttribute("open") !== null) {
-    await setupSummary.focus();
-    await page.keyboard.press("Enter");
-    await page.waitForFunction(() => !document.querySelector(".rd-setupd")?.hasAttribute("open"));
-  }
-
-  // Reach both disclosures from the ordinary keyboard order: Setup first,
-  // then the compact Theme summary as its first interactive child.
-  await setupSummary.focus();
-  await page.keyboard.press("Enter");
-  await page.waitForFunction(() => document.querySelector(".rd-setupd")?.hasAttribute("open"));
-  await page.keyboard.press("Tab");
-
-  const theme = page.locator(".rd-theme-compact-home .rd-themed-compact");
-  const themeSummary = theme.locator(":scope > .rd-theme-compact-sum");
-  assert.equal(await theme.isVisible(), true, `compact Theme is hidden at ${width}px`);
+  const theme = page.locator(".rd-theme-home .rd-themed");
+  const themeSummary = theme.locator(":scope > .rd-theme-sum");
+  assert.equal(await theme.isVisible(), true, `global Theme is hidden at ${width}px`);
   assert.equal(await themeSummary.getAttribute("aria-label"), "Choose Studio theme");
-  assert.equal(
-    await themeSummary.evaluate((element) => document.activeElement === element),
-    true,
-    `Tab did not reach compact Theme at ${width}px`,
-  );
+  await themeSummary.focus();
 
   await page.keyboard.press("Enter");
   await page.waitForFunction(() =>
-    document.querySelector(".rd-theme-compact-home .rd-themed-compact")?.hasAttribute("open"));
+    document.querySelector(".rd-theme-home .rd-themed")?.hasAttribute("open"));
   const choices = await theme.locator('[data-rd-form="theme"]').evaluateAll((forms) =>
     forms.map((form) => ({
       current: form.querySelector("button")?.getAttribute("aria-current") === "true",
@@ -574,7 +565,7 @@ async function assertCompactThemeKeyboard(page, width) {
       : document.documentElement.dataset.theme === themeName,
   targetTheme);
   await page.waitForFunction(() =>
-    !document.querySelector(".rd-theme-compact-home .rd-themed-compact")?.hasAttribute("open"));
+    !document.querySelector(".rd-theme-home .rd-themed")?.hasAttribute("open"));
 
   const documentWidth = await page.evaluate(() => ({
     client: document.documentElement.clientWidth,
@@ -582,7 +573,7 @@ async function assertCompactThemeKeyboard(page, width) {
   }));
   assert.ok(
     documentWidth.scroll <= documentWidth.client,
-    `${width}px compact Theme introduced horizontal overflow: ${JSON.stringify(documentWidth)}`,
+    `${width}px global Theme introduced horizontal overflow: ${JSON.stringify(documentWidth)}`,
   );
 }
 
@@ -667,13 +658,13 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
     }
   });
 
-  test("compact Theme stays keyboard-reachable and applies at phone and tablet widths", async () => {
+  test("global Theme stays keyboard-reachable and applies at phone and tablet widths", async () => {
     const page = await openRunningDirtyBench();
     try {
       for (const width of [390, 600, 1141, 1439]) {
-        await assertCompactThemeKeyboard(page, width);
+        await assertGlobalThemeKeyboard(page, width);
       }
-      assert.deepEqual(page.ksxNoise, [], "compact Theme must stay error-free");
+      assert.deepEqual(page.ksxNoise, [], "global Theme must stay error-free");
     } finally {
       await page.close();
     }
@@ -963,81 +954,51 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
     }
   });
 
-  test("Theme keeps one disclosure state and visible focus across its rail breakpoint", async () => {
+  test("Theme keeps one stable disclosure and focused trigger across rail breakpoints", async () => {
     const page = await openSurface(
       "/redesign?slot=1",
       { width: RAIL_PREFERENCES_MIN, height: 900 },
     );
     try {
-      const rail = page.locator(".rd-theme-rail-home [data-rd-theme-menu]");
-      const railSummary = rail.locator(":scope > .rd-theme-sum");
-      await railSummary.focus();
+      const theme = page.locator(".rd-theme-home [data-rd-theme-menu]");
+      const summary = theme.locator(":scope > .rd-theme-sum");
+      assert.equal(await page.locator("[data-rd-theme-menu]").count(), 1);
+      await summary.focus();
       await page.keyboard.press("Enter");
-      assert.notEqual(await rail.getAttribute("open"), null);
+      assert.notEqual(await theme.getAttribute("open"), null);
       assert.equal(await page.locator("[data-rd-theme-menu][open]").count(), 1);
 
       await page.setViewportSize({ width: RAIL_PREFERENCES_MIN - 1, height: 900 });
-      await page.waitForFunction(
-        () => document.querySelectorAll("[data-rd-theme-menu][open]").length === 0,
-      );
-      const setup = page.locator(".rd-setupd");
-      const setupSummary = setup.locator(":scope > .rd-setup-sum");
       assert.equal(
-        await setupSummary.evaluate((element) => document.activeElement === element),
+        await summary.evaluate((element) => document.activeElement === element),
         true,
-        "the hidden rail Theme summary retained focus after narrowing",
+        "the stable Theme trigger lost focus after narrowing",
       );
-
-      await page.keyboard.press("Enter");
-      const compact = page.locator(".rd-theme-compact-home [data-rd-theme-menu]");
-      const compactSummary = compact.locator(":scope > .rd-theme-compact-sum");
-      await compactSummary.focus();
-      await page.keyboard.press("Enter");
-      assert.notEqual(await compact.getAttribute("open"), null);
       assert.equal(await page.locator("[data-rd-theme-menu][open]").count(), 1);
 
-      await page.setViewportSize({ width: RAIL_PREFERENCES_MIN, height: 900 });
-      await page.waitForFunction(
-        () => document.querySelectorAll("[data-rd-theme-menu][open]").length === 0,
-      );
+      await page.setViewportSize({ width: 390, height: 900 });
       assert.equal(
-        await railSummary.evaluate((element) => document.activeElement === element),
+        await summary.evaluate((element) => document.activeElement === element),
         true,
-        "the hidden compact Theme summary retained focus after widening",
+        "the stable Theme trigger lost focus at phone width",
       );
+      assert.equal(await page.locator("[data-rd-theme-menu][open]").count(), 1);
+      const menuBox = await page.locator(".rd-thememenu").boundingBox();
+      assertBoxInsideViewport(menuBox, 390, "Theme menu");
 
-      await page.setViewportSize({ width: RAIL_PREFERENCES_MIN - 1, height: 900 });
-      await page.waitForFunction(
-        () => document.activeElement?.matches(".rd-setupd > .rd-setup-sum"),
-      );
-      if (await setup.getAttribute("open") === null) await page.keyboard.press("Enter");
-      await compactSummary.focus();
-      assert.equal(await compact.getAttribute("open"), null);
       await page.setViewportSize({ width: RAIL_PREFERENCES_MIN, height: 900 });
-      await page.waitForFunction(
-        () => document.activeElement?.matches(
-          ".rd-theme-rail-home [data-rd-theme-menu] > .rd-theme-sum",
-        ),
-      );
-
-      await page.keyboard.press("Enter");
-      await page.keyboard.press("Shift+Tab");
       assert.equal(
-        await page.locator(".rd-run-actions").evaluate((group) =>
-          group.contains(document.activeElement)),
+        await summary.evaluate((element) => document.activeElement === element),
         true,
-        "the keyboard did not leave open Theme for the lifecycle rail",
+        "the stable Theme trigger lost focus after widening",
       );
-      await page.setViewportSize({ width: RAIL_PREFERENCES_MIN - 1, height: 900 });
-      await page.waitForFunction(
-        () => document.querySelectorAll("[data-rd-theme-menu][open]").length === 0,
-      );
+      await page.keyboard.press("Escape");
       assert.equal(
-        await page.locator(".rd-run-actions").evaluate((group) =>
-          group.contains(document.activeElement)),
+        await summary.evaluate((element) => document.activeElement === element),
         true,
-        "closing an unfocused Theme copy stole focus at its breakpoint",
+        "Escape did not return focus to the stable Theme trigger",
       );
+      assert.equal(await page.locator("[data-rd-theme-menu][open]").count(), 0);
       assert.deepEqual(page.ksxNoise, []);
     } finally {
       await page.close();

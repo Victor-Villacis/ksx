@@ -347,16 +347,16 @@ describe("redesign migration hardening", { concurrency: false }, () => {
       y: Number(item.dataset.canvasY),
       width: Number(item.dataset.canvasWidth),
       height: Number(item.dataset.canvasHeight),
+      contentHeight: item.offsetHeight,
       manualScale: Number(item.dataset.canvasManualScale),
     }));
     const expectedGeometry = {
       x: selectorGeometry.x,
       y: selectorGeometry.y,
       // Keyboard boards are not resizable: their exact selector slot owns
-      // position/scale and any still-valid saved height, while the current
-      // one-surface board owns its fixed width.
+      // position/scale while the current one-surface board owns its width and
+      // intrinsic content height.
       width: 980,
-      height: selectorGeometry.height,
       manualScale: selectorGeometry.manualScale,
     };
 
@@ -429,10 +429,26 @@ describe("redesign migration hardening", { concurrency: false }, () => {
         G915_ID,
         { timeout: 20_000 },
       );
+      const mounted = await mountedGeometry();
       assert.deepEqual(
-        await mountedGeometry(),
+        {
+          x: mounted.x,
+          y: mounted.y,
+          width: mounted.width,
+          manualScale: mounted.manualScale,
+        },
         expectedGeometry,
         "later authority keeps the selector-specific placement instead of reviving stale synthetic geometry",
+      );
+      assert.equal(
+        mounted.height,
+        mounted.contentHeight,
+        "the saved canvas hull follows the keyboard's intrinsic rendered height",
+      );
+      assert.notEqual(
+        mounted.height,
+        selectorGeometry.height,
+        "the obsolete saved keyboard height cannot recreate the blank drag hull",
       );
       assert.equal(
         await page.evaluate(() =>

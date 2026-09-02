@@ -1732,10 +1732,9 @@ describe("the device workbench", () => {
       );
       // Initial HTML carries the fixture's normal roster. A theme mutation
       // performs the live `/api/redesign` repaint this test has overridden.
-      await page.click(".rd-setupd > .rd-setup-sum");
-      await page.click(".rd-theme-compact-home .rd-theme-compact-sum");
+      await page.click(".rd-theme-home .rd-theme-sum");
       await page.click(
-        '.rd-thememenu-compact form:has(input[value="light"]) button',
+        '.rd-thememenu form:has(input[value="light"]) button',
       );
       await page.waitForFunction(
         (selector) => document.querySelector(
@@ -3061,11 +3060,77 @@ describe("the device workbench", () => {
       await g915Board.locator("[data-rd-keyboard-surface] .n-kb [data-key]").count() > 80,
       "every intentionally added keyboard owns a full interactive key surface",
     );
-    assert.equal(
-      Number(await g915Board.getAttribute("data-canvas-height")) >= 460,
-      true,
-      "a physical keyboard reserves its full board footprint",
+    await page.waitForFunction((id) => {
+      const item = document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`);
+      const shell = item?.querySelector(".rd-keyboard-device-shell");
+      if (!(item instanceof HTMLElement) || !(shell instanceof HTMLElement)) return false;
+      const itemHeight = item.getBoundingClientRect().height;
+      const shellHeight = shell.getBoundingClientRect().height;
+      return Math.abs(itemHeight - shellHeight) <= 1 &&
+        Math.abs(Number(item.dataset.canvasHeight) - item.offsetHeight) <= 1;
+    }, G915_SLUG);
+    const boardBounds = await g915Board.evaluate((item) => {
+      const shell = item.querySelector(".rd-keyboard-device-shell");
+      const itemRect = item.getBoundingClientRect();
+      const shellRect = shell?.getBoundingClientRect();
+      return {
+        itemHeight: itemRect.height,
+        shellHeight: shellRect?.height ?? 0,
+        layoutHeight: item.offsetHeight,
+        recordedHeight: Number(item.getAttribute("data-canvas-height")),
+        inlineMinHeight: item.style.minHeight,
+      };
+    });
+    assert.ok(
+      Math.abs(boardBounds.itemHeight - boardBounds.shellHeight) <= 1,
+      `keyboard canvas hull exceeds its visible surface: ${JSON.stringify(boardBounds)}`,
     );
+    assert.ok(
+      Math.abs(boardBounds.recordedHeight - boardBounds.layoutHeight) <= 1,
+      `keyboard canvas geometry is not its measured surface: ${JSON.stringify(boardBounds)}`,
+    );
+    assert.equal(
+      boardBounds.inlineMinHeight,
+      "",
+      "an intrinsic keyboard must not retain a persisted inline height floor",
+    );
+    const baselineHeight = boardBounds.recordedHeight;
+    await g915Board.evaluate((item) => {
+      const probe = document.createElement("div");
+      probe.dataset.keyboardHeightProbe = "";
+      probe.style.height = "96px";
+      item.querySelector("[data-forma-runtime-host]")?.append(probe);
+    });
+    await page.waitForFunction(({ id, baseline }) =>
+      Number(document.querySelector(`[data-instance-id="${id}"]`)?.getAttribute(
+        "data-canvas-height",
+      )) >= baseline + 90,
+    { id: G915_SLUG, baseline: baselineHeight });
+    const expandedHeight = Number(await g915Board.getAttribute("data-canvas-height"));
+    await g915Board.evaluate((item) => {
+      item.dataset.attentionState = "parked";
+    });
+    await page.waitForTimeout(100);
+    assert.equal(
+      Number(await g915Board.getAttribute("data-canvas-height")),
+      expandedHeight,
+      "off-screen content-visibility parking must not replace live keyboard geometry with its fallback",
+    );
+    await g915Board.evaluate((item) => {
+      item.dataset.attentionState = "visible";
+    });
+    await page.waitForFunction(({ id, expanded }) => {
+      const item = document.querySelector(`[data-instance-id="${id}"]`);
+      return item instanceof HTMLElement &&
+        Math.abs(item.offsetHeight - expanded) <= 1 &&
+        Number(item.dataset.canvasHeight) === expanded;
+    }, { id: G915_SLUG, expanded: expandedHeight });
+    await g915Board.locator("[data-keyboard-height-probe]").evaluate((probe) => probe.remove());
+    await page.waitForFunction(({ id, baseline }) =>
+      Math.abs(Number(document.querySelector(`[data-instance-id="${id}"]`)?.getAttribute(
+        "data-canvas-height",
+      )) - baseline) <= 1,
+    { id: G915_SLUG, baseline: baselineHeight });
     assert.equal(
       (await g915Board.locator(".n-kbhead > .n-kick").textContent())?.trim(),
       "Logitech G915 TKL",
@@ -3105,6 +3170,125 @@ describe("the device workbench", () => {
       "On canvas — press to remove board",
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await closePage(page);
+  });
+
+  test("an oversized persisted keyboard hull normalizes without losing its arrangement", async () => {
+    const page = await openBench();
+    await page.click('[data-nx="rd-devs-open"]');
+    const row = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
+    if ((await row.getAttribute("aria-pressed")) !== "true") await row.click();
+    await page.keyboard.press("Escape");
+
+    const board = page.locator(
+      `.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`,
+    );
+    await board.waitFor({ state: "visible" });
+    const before = await board.evaluate((node) => ({
+      x: Number(node.dataset.canvasX),
+      y: Number(node.dataset.canvasY),
+      width: Number(node.dataset.canvasWidth),
+      height: Number(node.dataset.canvasHeight),
+      z: Number(node.dataset.canvasZ),
+      manualScale: Number(node.dataset.canvasManualScale),
+    }));
+
+    await page.addInitScript((instanceId) => {
+      if (sessionStorage.getItem("ksx-injected-oversized-keyboard-hull") === "true") return;
+      sessionStorage.setItem("ksx-injected-oversized-keyboard-hull", "true");
+      const saved = JSON.parse(localStorage.getItem("ksx-redesign-canvas") ?? "{}");
+      if (saved.widgets?.[instanceId]) {
+        saved.widgets[instanceId].height = 640;
+        localStorage.setItem("ksx-redesign-canvas", JSON.stringify(saved));
+      }
+    }, G915_SLUG);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      (id) => document.querySelector(`[data-instance-id="${id}"]`)?.dataset.canvasHeight !==
+        undefined,
+      G915_SLUG,
+    );
+    const after = await board.evaluate((node) => {
+      const shell = node.querySelector(".rd-keyboard-device-shell");
+      const itemRect = node.getBoundingClientRect();
+      return {
+        x: Number(node.dataset.canvasX),
+        y: Number(node.dataset.canvasY),
+        width: Number(node.dataset.canvasWidth),
+        height: Number(node.dataset.canvasHeight),
+        z: Number(node.dataset.canvasZ),
+        manualScale: Number(node.dataset.canvasManualScale),
+        shellHeight: shell?.getBoundingClientRect().height ?? 0,
+        itemHeight: itemRect.height,
+        inlineMinHeight: node.style.minHeight,
+      };
+    });
+    assert.deepEqual(
+      {
+        x: after.x,
+        y: after.y,
+        width: after.width,
+        z: after.z,
+        manualScale: after.manualScale,
+      },
+      {
+        x: before.x,
+        y: before.y,
+        width: before.width,
+        z: before.z,
+        manualScale: before.manualScale,
+      },
+      "height migration must preserve the user's keyboard arrangement",
+    );
+    assert.ok(after.height < 640, `obsolete saved hull survived: ${JSON.stringify(after)}`);
+    assert.ok(
+      Math.abs(after.itemHeight - after.shellHeight) <= 1,
+      `migrated keyboard hull exceeds its visible surface: ${JSON.stringify(after)}`,
+    );
+    assert.equal(after.inlineMinHeight, "");
+    assert.deepEqual(page.ksxNoise, [], "height migration stays error-free");
+    await closePage(page);
+  });
+
+  test("intrinsic keyboard growth remains inside the reachable canvas world", async () => {
+    const page = await openBench();
+    await page.click('[data-nx="rd-devs-open"]');
+    const row = page.locator(`.rd-devmodal button[data-selector="${G915}"]`);
+    if ((await row.getAttribute("aria-pressed")) !== "true") await row.click();
+    await page.keyboard.press("Escape");
+    const board = page.locator(
+      `.forma-canvas-stage [data-instance-id="${G915_SLUG}"]`,
+    );
+    await board.waitFor({ state: "visible" });
+    await page.addInitScript((instanceId) => {
+      if (sessionStorage.getItem("ksx-injected-world-edge-keyboard") === "true") return;
+      sessionStorage.setItem("ksx-injected-world-edge-keyboard", "true");
+      const saved = JSON.parse(localStorage.getItem("ksx-redesign-canvas") ?? "{}");
+      const geometry = saved.widgets?.[instanceId];
+      if (!geometry) throw new Error("keyboard geometry was not persisted");
+      geometry.y = 11680;
+      geometry.height = 320;
+      localStorage.setItem("ksx-redesign-canvas", JSON.stringify(saved));
+    }, G915_SLUG);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction((id) => {
+      const item = document.querySelector(`[data-instance-id="${id}"]`);
+      return item instanceof HTMLElement &&
+        Number(item.dataset.canvasHeight) > 320 &&
+        Number(item.dataset.canvasY) < 11680;
+    }, G915_SLUG);
+    const geometry = await board.evaluate((item) => {
+      const y = Number(item.dataset.canvasY);
+      const height = Number(item.dataset.canvasHeight);
+      const scale = Number(item.dataset.canvasManualScale);
+      const overhang = (height * scale - height) / 2;
+      return { y, height, scale, visualBottom: y + height + overhang };
+    });
+    assert.ok(
+      geometry.visualBottom <= 12000.001,
+      `measured keyboard escaped the canvas world: ${JSON.stringify(geometry)}`,
+    );
+    assert.deepEqual(page.ksxNoise, [], "world-edge re-clamping stays error-free");
     await closePage(page);
   });
 

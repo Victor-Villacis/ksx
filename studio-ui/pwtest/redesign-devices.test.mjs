@@ -1323,33 +1323,52 @@ describe("the device workbench", () => {
       await page.waitForFunction(
         () => document.activeElement?.getAttribute("data-terminal-id") === "1down",
       );
+      // F2 owns an asynchronous camera landing. Settle it before probing the
+      // scale boundary; otherwise its final visibility frame can correctly
+      // replace a test-authored attention scale between two assertions.
+      await page.waitForFunction(() => !document.querySelector(".is-camera-animating"));
       const priorAttention = await node.evaluate((item) => ({
+        manualScale: item.getAttribute("data-canvas-manual-scale"),
         scale: item.getAttribute("data-attention-scale"),
         cssScale: item.style.getPropertyValue("--widget-attention-scale"),
       }));
       await node.evaluate((item) => {
+        item.dataset.canvasManualScale = "0.89";
         item.dataset.attentionScale = "0.89";
         item.style.setProperty("--widget-attention-scale", "0.89");
       });
       await page.waitForFunction((id) => {
         const item = document.querySelector(`[data-instance-id="${id}"]`);
         const host = item?.querySelector('.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host');
-        return item?.getAttribute("data-encoder-editable") === "false" && host?.inert === true;
+        return item?.getAttribute("data-canvas-manual-scale") === "0.89" &&
+          item?.getAttribute("data-encoder-editable") === "false" &&
+          host?.inert === true && host?.getAttribute("aria-hidden") === "true";
       }, IPAC_SLUG);
-      assert.equal(
-        await node.locator('.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host')
-          .getAttribute("aria-hidden"),
-        "true",
+      assert.deepEqual(
+        await node.evaluate((item) => {
+          const host = item.querySelector(
+            '.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host',
+          );
+          return {
+            editable: item.getAttribute("data-encoder-editable"),
+            inert: host?.inert,
+            ariaHidden: host?.getAttribute("aria-hidden"),
+          };
+        }),
+        { editable: "false", inert: true, ariaHidden: "true" },
         "a sub-boundary schematic is visible but unavailable to pointer and keyboard routing",
       );
       await node.evaluate((item) => {
+        item.dataset.canvasManualScale = "0.9";
         item.dataset.attentionScale = "0.9";
         item.style.setProperty("--widget-attention-scale", "0.9");
       });
       await page.waitForFunction((id) => {
         const item = document.querySelector(`[data-instance-id="${id}"]`);
         const host = item?.querySelector('.rd-encoder-profile[data-presentation="product"] .rd-encoder-profile-host');
-        return item?.getAttribute("data-encoder-editable") === "true" && host?.inert === false;
+        return item?.getAttribute("data-canvas-manual-scale") === "0.9" &&
+          item?.getAttribute("data-encoder-editable") === "true" &&
+          host?.inert === false && host?.getAttribute("aria-hidden") === null;
       }, IPAC_SLUG);
       assert.ok(
         await node.locator(".rd-encoder-product-terminal-hit").evaluateAll((targets) =>
@@ -1361,6 +1380,8 @@ describe("the device workbench", () => {
         "the exact editing boundary admits controls only after every target clears 44px",
       );
       await node.evaluate((item, previous) => {
+        if (previous.manualScale === null) delete item.dataset.canvasManualScale;
+        else item.dataset.canvasManualScale = previous.manualScale;
         if (previous.scale === null) delete item.dataset.attentionScale;
         else item.dataset.attentionScale = previous.scale;
         if (previous.cssScale) item.style.setProperty("--widget-attention-scale", previous.cssScale);

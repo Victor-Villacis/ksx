@@ -83,13 +83,21 @@ let captureConfirmationAuthority: string | null = null;
 const IDENTIFY_OK_FLASH =
   "Keyboard identified and selected. Nothing has been captured, saved, or started.";
 const IDENTIFY_CANCELLED_FLASH = "Keyboard identification cancelled. Nothing changed.";
+const IDENTIFY_ALREADY_ANSWERED_FLASH =
+  "error: That keyboard identification has already answered. Check the current input source before trying again.";
+const IDENTIFY_RECOVERED_FLASH =
+  "A keyboard answered while the page was changing. Current mapping sources are now up to date.";
+const IDENTIFY_ABANDONED_ATTEMPT_KEY = "ksx-redesign-identify-abandoned-attempt";
 const DEVICE_REMOVE_CONFIRM_FLASH =
   "error: This keyboard has controller mappings. Confirm Remove to discard those unsaved routes; nothing was changed.";
 let identifyRequestController: AbortController | null = null;
 let identifyRequestAttempt: string | null = null;
 let identifyCancellationAccepted = false;
 let identifyCancellationTask: Promise<boolean> | null = null;
+type AbandonedIdentifyCleanupOutcome = "none" | "cancelled" | "answered" | "failed";
+let identifyAbandonedCleanupTask: Promise<AbandonedIdentifyCleanupOutcome> | null = null;
 let identifyLifecycleWired = false;
+let identifyLifecycleEpoch = 0;
 
 function applyAuthority(operations: RedesignPayload["operations"] | null | undefined): string {
   if (!operations) return "";
@@ -448,7 +456,12 @@ function wireForms(root: HTMLElement): void {
   if (!identifyLifecycleWired) {
     identifyLifecycleWired = true;
     window.addEventListener("pagehide", abandonIdentifyOnPageHide);
+    window.addEventListener("pageshow", recoverIdentifyAfterPageShow);
   }
+  // Navigation can outrun a pagehide beacon. Start retiring this tab's exact
+  // abandoned nonce during hydration. Its exact cancel plus authority repaint
+  // own the whole island, so no lifecycle or device write can overtake it.
+  void recoverAbandonedIdentifyAfterHydration(root);
   wireApplyRestartDialog(root);
 }
 
@@ -547,10 +560,10 @@ async function retryWorkbenchStatus(
   }
 }
 
-function beginMutation(root: HTMLElement): SubmitControl[] | null {
+function beginMutation(root: HTMLElement, cancelRefresh = true): SubmitControl[] | null {
   if (pendingMutationRoots.has(root)) return null;
   pendingMutationRoots.add(root);
-  cancelActiveRefresh();
+  if (cancelRefresh) cancelActiveRefresh();
   root.dataset.rdMutationPending = "true";
   root.setAttribute("aria-busy", "true");
   const controls = Array.from(
@@ -575,6 +588,24 @@ function endMutation(root: HTMLElement, controls: SubmitControl[]): void {
     control.disabled = served ?? control.dataset.rdProductDisabled === "true";
   });
   pendingMutationRoots.delete(root);
+}
+
+let identifyMutationLease: { root: HTMLElement; controls: SubmitControl[] } | null = null;
+
+function beginIdentifyMutation(
+  root: HTMLElement,
+  cancelRefresh = true,
+): SubmitControl[] | null {
+  const controls = beginMutation(root, cancelRefresh);
+  if (controls) identifyMutationLease = { root, controls };
+  return controls;
+}
+
+function endIdentifyMutation(root: HTMLElement): void {
+  const lease = identifyMutationLease;
+  if (!lease || lease.root !== root) return;
+  identifyMutationLease = null;
+  endMutation(root, lease.controls);
 }
 
 /** Rescan is a foreground authority transaction, even though it writes no
@@ -723,9 +754,12 @@ function setIdentifyModalPending(root: HTMLElement, pending: boolean): void {
   if (pending) modal.dataset.rdIdentifyPending = "true";
   else delete modal.dataset.rdIdentifyPending;
   modal.querySelectorAll<HTMLButtonElement>(
-    '[data-nx="rd-dev-toggle"], [data-nx="rd-devs-close"]',
+    '[data-nx="rd-dev-toggle"], [data-nx="rd-devs-close"], .rd-identify-start',
   ).forEach((button) => {
-    button.disabled = pending;
+    const form = button.closest<HTMLFormElement>("form[data-rd-form]");
+    const served = form ? redesignFormProductDisabled(form) : undefined;
+    button.disabled = pending || root.dataset.rdMutationPending === "true" ||
+      (served ?? button.dataset.rdProductDisabled === "true");
   });
 }
 
@@ -835,14 +869,196 @@ function guardIdentifyKey(event: KeyboardEvent): void {
   if (event.key === "Escape" && event.type === "keydown") void cancelIdentify(root);
 }
 
+function abandonedIdentifyAttempt(): string | null {
+  try {
+    return window.sessionStorage.getItem(IDENTIFY_ABANDONED_ATTEMPT_KEY)?.trim() || null;
+  } catch {
+    // Storage can be disabled independently of the page. The pagehide beacon
+    // remains the best available exact-nonce cleanup in that environment.
+    return null;
+  }
+}
+
+function rememberAbandonedIdentifyAttempt(attempt: string): void {
+  try {
+    window.sessionStorage.setItem(IDENTIFY_ABANDONED_ATTEMPT_KEY, attempt);
+  } catch {
+    // See abandonedIdentifyAttempt: never broaden cancellation because this
+    // tab cannot persist its exact owner.
+  }
+}
+
+function forgetAbandonedIdentifyAttempt(attempt: string): void {
+  try {
+    if (window.sessionStorage.getItem(IDENTIFY_ABANDONED_ATTEMPT_KEY) === attempt) {
+      window.sessionStorage.removeItem(IDENTIFY_ABANDONED_ATTEMPT_KEY);
+    }
+  } catch {
+    // A successful exact cancellation is still authoritative even when the
+    // storage implementation disappears between navigation and cleanup.
+  }
+}
+
+async function performAbandonedIdentifyCleanup(
+  attempt: string,
+): Promise<AbandonedIdentifyCleanupOutcome> {
+  try {
+    const response = await fetch("/redesign/device/identify/cancel", {
+      method: "POST",
+      body: new URLSearchParams({ attempt }),
+      redirect: "follow",
+    });
+    if (!response.ok) return "failed";
+    const outcome = new URL(response.url).searchParams.get("flash");
+    const answered = outcome === IDENTIFY_ALREADY_ANSWERED_FLASH;
+    if (outcome !== IDENTIFY_CANCELLED_FLASH && !answered) return "failed";
+    // "Already answered" means an exact-device resolution may have staged a
+    // source while this document was away. Cancellation is also reconciled so
+    // one recovery path has one authority boundary. Keep the nonce until that
+    // repaint succeeds; a retry must never forget an unconfirmed outcome.
+    if (!(await refresh())) return "failed";
+    forgetAbandonedIdentifyAttempt(attempt);
+    if (answered && redesignRoot) {
+      applyRedesignFlash(IDENTIFY_RECOVERED_FLASH);
+      setIdentifyUi(
+        redesignRoot,
+        "identified",
+        "Previous keyboard check finished",
+        "A keyboard answered while the page was changing. Review the now-current mapping-source list before identifying another.",
+      );
+    }
+    return answered ? "answered" : "cancelled";
+  } catch {
+    return "failed";
+  }
+}
+
+function beginAbandonedIdentifyCleanup(): Promise<AbandonedIdentifyCleanupOutcome> {
+  if (identifyAbandonedCleanupTask) return identifyAbandonedCleanupTask;
+  const attempt = abandonedIdentifyAttempt();
+  if (!attempt) return Promise.resolve("none");
+  const task = performAbandonedIdentifyCleanup(attempt);
+  identifyAbandonedCleanupTask = task;
+  void task.finally(() => {
+    if (identifyAbandonedCleanupTask === task) identifyAbandonedCleanupTask = null;
+  });
+  return task;
+}
+
+async function recoverAbandonedIdentifyAfterHydration(root: HTMLElement): Promise<void> {
+  if (!abandonedIdentifyAttempt()) return;
+  const lifecycleEpoch = identifyLifecycleEpoch;
+  const submits = beginIdentifyMutation(root, false);
+  if (!submits) return;
+  setIdentifyModalPending(root, true);
+  setIdentifyUi(
+    root,
+    "resolving",
+    "Finishing the previous device check",
+    "Confirming that the exact listener from before navigation has finished…",
+  );
+  const outcome = await beginAbandonedIdentifyCleanup();
+  if (lifecycleEpoch !== identifyLifecycleEpoch) return;
+  setIdentifyModalPending(root, false);
+  if (outcome === "cancelled" || outcome === "none") {
+    setIdentifyUi(
+      root,
+      "idle",
+      "Ready to identify",
+      "The previous exact listener is stopped. Start again whenever you are ready.",
+    );
+  } else if (outcome === "failed") {
+    applyRedesignFlash(
+      "error: the previous keyboard listener could not be released — check the connection and try again.",
+    );
+    setIdentifyUi(
+      root,
+      "error",
+      "Previous listener still needs attention",
+      "KSX could not confirm that this tab's earlier exact listener stopped. Try Identify again when the connection is available.",
+    );
+  }
+  // performAbandonedIdentifyCleanup paints the conservative identified state
+  // itself when the old answer won. Ordinary hydration never moves focus.
+  endIdentifyMutation(root);
+}
+
+async function recoverIdentifyAfterPageShow(event: PageTransitionEvent): Promise<void> {
+  const root = redesignRoot;
+  if (!event.persisted || !root || !abandonedIdentifyAttempt()) return;
+  // An active identify request or cleanup preflight carries its island lease
+  // through pagehide. A restore after an earlier hydration-cleanup failure has
+  // only the persisted nonce, so reacquire the same lease before retrying its
+  // cancellation and authority read. If another mutation owns the island,
+  // leave the nonce intact for the next recovery or explicit Identify attempt.
+  if (identifyMutationLease?.root !== root && !beginIdentifyMutation(root, false)) return;
+  const lifecycleEpoch = ++identifyLifecycleEpoch;
+  setIdentifyModalPending(root, true);
+  setIdentifyUi(
+    root,
+    "resolving",
+    "Restoring the device check",
+    "Confirming that the exact listener from before navigation has finished…",
+  );
+  const status = root.querySelector<HTMLElement>("[data-rd-identify-status]");
+  status?.focus({
+    preventScroll: true,
+  });
+  const outcome = await beginAbandonedIdentifyCleanup();
+  if (lifecycleEpoch !== identifyLifecycleEpoch) return;
+  const restoreFocus = status ? actionStillOwnsFocus(status, status) : false;
+  setIdentifyModalPending(root, false);
+  if (outcome === "answered") {
+    endIdentifyMutation(root);
+    if (restoreFocus) {
+      root.querySelector<HTMLElement>("[data-rd-identify-status]")?.focus({
+        preventScroll: true,
+      });
+    }
+    return;
+  }
+  if (outcome === "cancelled" || outcome === "none") {
+    setIdentifyUi(
+      root,
+      "idle",
+      "Ready to identify",
+      "The previous exact listener is stopped. Start again whenever you are ready.",
+    );
+  } else {
+    applyRedesignFlash(
+      "error: the previous keyboard listener could not be released — check the connection and try again.",
+    );
+    setIdentifyUi(
+      root,
+      "error",
+      "Previous listener still needs attention",
+      "KSX could not confirm that this tab's earlier exact listener stopped. Try Identify again when the connection is available.",
+    );
+  }
+  endIdentifyMutation(root);
+  if (restoreFocus) {
+    root.querySelector<HTMLElement>("[data-rd-identify-status]")?.focus({
+      preventScroll: true,
+    });
+  }
+}
+
 /** A long-lived identify POST outlives its document unless the exact attempt
  * is cancelled explicitly. Queue the cancellation through the browser's
  * navigation-safe channel before aborting the page-owned fetch; the nonce
  * makes duplicate or delayed delivery harmless to another tab's listener. */
 function abandonIdentifyOnPageHide(): void {
+  // Invalidate every in-flight preflight as well as an active listener. A
+  // submit can be awaiting abandoned-nonce cleanup before it owns a request
+  // controller; BFCache restoration must not let that old click resume into a
+  // brand-new listener without another user action.
+  identifyLifecycleEpoch += 1;
   const controller = identifyRequestController;
   const attempt = identifyRequestAttempt;
   if (!controller || !attempt) return;
+  // Persist before queueing: the next document must be able to retire this
+  // exact owner even when navigation wins the race with beacon delivery.
+  rememberAbandonedIdentifyAttempt(attempt);
   const body = new URLSearchParams({ attempt });
   const queued = navigator.sendBeacon("/redesign/device/identify/cancel", body);
   if (!queued) {
@@ -971,9 +1187,62 @@ async function submitIdentifyForm(
   root: HTMLElement,
   submitter: HTMLElement | null,
 ): Promise<void> {
-  const submits = beginMutation(root);
-  if (!submits) return;
+  const preflightEpoch = identifyLifecycleEpoch;
   const owner = identifySurface(root) ?? form;
+  const hasAbandonedAttempt = Boolean(abandonedIdentifyAttempt());
+  let submits: SubmitControl[] | null = null;
+  if (hasAbandonedAttempt) {
+    // Keep the complete island fenced while cleanup owns its authority read,
+    // but do not abort that read as an ordinary new mutation would.
+    submits = beginIdentifyMutation(root, false);
+    if (!submits) return;
+    setIdentifyModalPending(root, true);
+    setIdentifyUi(
+      root,
+      "resolving",
+      "Finishing the previous device check",
+      "Releasing this tab's earlier exact listener before starting a new one…",
+    );
+  }
+  const abandonedOutcome = await beginAbandonedIdentifyCleanup();
+  if (preflightEpoch !== identifyLifecycleEpoch) return;
+  if (abandonedOutcome === "failed") {
+    setIdentifyModalPending(root, false);
+    applyRedesignFlash(
+      "error: the previous keyboard listener could not be released — check the connection and try again.",
+    );
+    setIdentifyUi(
+      root,
+      "error",
+      "Previous listener still needs attention",
+      "KSX could not confirm that this tab's earlier exact listener stopped. Try Identify again when the connection is available.",
+    );
+    const restoreFocus = actionStillOwnsFocus(owner, submitter);
+    endIdentifyMutation(root);
+    if (restoreFocus) {
+      form.querySelector<HTMLElement>('button[type="submit"]')?.focus({ preventScroll: true });
+    }
+    return;
+  }
+  if (abandonedOutcome === "answered") {
+    setIdentifyModalPending(root, false);
+    const restoreFocus = actionStillOwnsFocus(owner, submitter);
+    endIdentifyMutation(root);
+    if (restoreFocus) {
+      root.querySelector<HTMLElement>("[data-rd-identify-status]")?.focus({
+        preventScroll: true,
+      });
+    }
+    return;
+  }
+  // No abandoned cleanup needed a preflight lock, so begin the ordinary
+  // mutation now and retire any read that sampled pre-write authority.
+  submits ??= beginIdentifyMutation(root);
+  if (!submits) {
+    setIdentifyModalPending(root, false);
+    return;
+  }
+  const lifecycleEpoch = ++identifyLifecycleEpoch;
   const controller = new AbortController();
   const words = crypto.getRandomValues(new Uint32Array(4));
   const attempt = Array.from(words, (word) => word.toString(16).padStart(8, "0")).join("");
@@ -1083,9 +1352,14 @@ async function submitIdentifyForm(
       identifyRequestController = null;
       identifyRequestAttempt = null;
     }
+    if (lifecycleEpoch !== identifyLifecycleEpoch) {
+      // BFCache recovery inherits this island lock and releases it only after
+      // exact cancellation and the authority repaint are both terminal.
+      return;
+    }
     setIdentifyModalPending(root, false);
     const restoreFocus = actionStillOwnsFocus(owner, submitter);
-    endMutation(root, submits);
+    endIdentifyMutation(root);
     if (!restoreFocus) return;
     if (identified) {
       root.querySelector<HTMLElement>("[data-rd-identify-status]")?.focus({

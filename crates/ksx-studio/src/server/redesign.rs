@@ -805,6 +805,35 @@ fn redesign_identify_attempt(attempt: String) -> Result<Option<String>, ()> {
     Ok(Some(attempt.to_owned()))
 }
 
+/// Exact cancellation and answer resolution are terminal only after their
+/// owner leaves the registry. Creating and enabling the notification before
+/// inspecting it prevents a clear+notify between the check and await from
+/// being lost.
+async fn wait_for_identify_retirement(state: &AppState, attempt: &str) {
+    loop {
+        let changed = state.redesign_identify_changed.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        let still_retiring = matches!(
+            state.redesign_identify.lock().unwrap().lease.as_ref(),
+            Some(super::RedesignIdentifyLease::Cancelled { attempt: owner })
+                | Some(super::RedesignIdentifyLease::Cancelling { attempt: owner, .. })
+                | Some(super::RedesignIdentifyLease::Resolving { attempt: owner, .. })
+                if owner == attempt
+        );
+        if !still_retiring {
+            return;
+        }
+        changed.await;
+    }
+}
+
+enum RedesignIdentifyCancelAction {
+    WaitCancelled,
+    WaitAnswered,
+    CancelGeneration(u64),
+}
+
 pub(super) async fn redesign_form_identify(
     State(state): State<Arc<AppState>>,
     form: RedesignForm<RedesignIdentifyForm>,
@@ -823,7 +852,14 @@ pub(super) async fn redesign_form_identify(
     });
     {
         let mut registry = state.redesign_identify.lock().unwrap();
+        if let Some(outcome) = registry.terminal(&attempt) {
+            return redesign_redirect(match outcome {
+                super::RedesignIdentifyTerminal::Answered => RD_IDENTIFY_ALREADY_ANSWERED,
+                super::RedesignIdentifyTerminal::Cancelled => RD_IDENTIFY_CANCELLED,
+            });
+        }
         if registry.take_pre_cancelled(&attempt) {
+            registry.remember_terminal(attempt, super::RedesignIdentifyTerminal::Cancelled);
             return redesign_redirect(RD_IDENTIFY_CANCELLED);
         }
         if registry.lease.is_some() {
@@ -845,8 +881,10 @@ pub(super) async fn redesign_form_identify(
 }
 
 /// Cancel only the listener generation opened by the redesign identify
-/// transaction. Taking it from the registry is the outcome boundary: the
-/// identify worker cannot stage after this returns the cancellation sentence.
+/// transaction. Active work enters a server-owned Cancelling marker; Pending
+/// work is fenced until its worker retires the marker and any generation it
+/// opened.
+/// In both cases the worker cannot stage after this returns "cancelled".
 pub(super) async fn redesign_form_identify_cancel(
     State(state): State<Arc<AppState>>,
     form: RedesignForm<RedesignIdentifyForm>,
@@ -857,30 +895,42 @@ pub(super) async fn redesign_form_identify_cancel(
     let Ok(Some(attempt)) = redesign_identify_attempt(form.attempt) else {
         return redesign_redirect(RD_IDENTIFY_ALREADY_ANSWERED);
     };
-    let generation = {
+    let action = {
         let mut registry = state.redesign_identify.lock().unwrap();
+        if let Some(outcome) = registry.terminal(&attempt) {
+            return redesign_redirect(match outcome {
+                super::RedesignIdentifyTerminal::Answered => RD_IDENTIFY_ALREADY_ANSWERED,
+                super::RedesignIdentifyTerminal::Cancelled => RD_IDENTIFY_CANCELLED,
+            });
+        }
         match registry.lease.as_ref() {
             Some(super::RedesignIdentifyLease::Pending { attempt: owner }) if owner == &attempt => {
-                registry.lease = Some(super::RedesignIdentifyLease::Cancelled { attempt });
-                return redesign_redirect(RD_IDENTIFY_CANCELLED);
+                registry.lease = Some(super::RedesignIdentifyLease::Cancelled {
+                    attempt: attempt.clone(),
+                });
+                RedesignIdentifyCancelAction::WaitCancelled
             }
             Some(super::RedesignIdentifyLease::Active {
                 attempt: owner,
                 generation,
             }) if owner == &attempt => {
                 let generation = *generation;
-                registry.lease = None;
-                Some(generation)
+                registry.lease = Some(super::RedesignIdentifyLease::Cancelling {
+                    attempt: attempt.clone(),
+                    generation,
+                });
+                RedesignIdentifyCancelAction::CancelGeneration(generation)
             }
             Some(super::RedesignIdentifyLease::Cancelled { attempt: owner })
+            | Some(super::RedesignIdentifyLease::Cancelling { attempt: owner, .. })
                 if owner == &attempt =>
             {
-                return redesign_redirect(RD_IDENTIFY_CANCELLED);
+                RedesignIdentifyCancelAction::WaitCancelled
             }
             Some(super::RedesignIdentifyLease::Resolving { attempt: owner, .. })
                 if owner == &attempt =>
             {
-                return redesign_redirect(RD_IDENTIFY_ALREADY_ANSWERED);
+                RedesignIdentifyCancelAction::WaitAnswered
             }
             Some(_) | None => {
                 // This nonce is not the active lease. It may be a stale tab,
@@ -892,17 +942,53 @@ pub(super) async fn redesign_form_identify_cancel(
             }
         }
     };
-    let Some(generation) = generation else {
-        return redesign_redirect(RD_IDENTIFY_ALREADY_ANSWERED);
-    };
-    // Taking Active above is the outcome boundary: the worker will refuse to
-    // stage even if the daemon reports a simultaneous hit or the best-effort
-    // pipe cancel itself fails. Only Resolving means the hit already won.
-    let _ = tokio::task::spawn_blocking(move || {
-        state.control.learn_cancel_generation(Some(generation))
-    })
-    .await;
-    redesign_redirect(RD_IDENTIFY_CANCELLED)
+    match action {
+        RedesignIdentifyCancelAction::WaitCancelled => {
+            wait_for_identify_retirement(&state, &attempt).await;
+            redesign_redirect(RD_IDENTIFY_CANCELLED)
+        }
+        RedesignIdentifyCancelAction::WaitAnswered => {
+            wait_for_identify_retirement(&state, &attempt).await;
+            redesign_redirect(RD_IDENTIFY_ALREADY_ANSWERED)
+        }
+        RedesignIdentifyCancelAction::CancelGeneration(generation) => {
+            // The blocking task owns marker retirement as well as the daemon
+            // call. If the HTTP client disconnects while awaiting it, dropping
+            // the JoinHandle detaches rather than cancels this exact cleanup.
+            let cancel_state = Arc::clone(&state);
+            let cancel_attempt = attempt.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    cancel_state
+                        .control
+                        .learn_cancel_generation(Some(generation))
+                }));
+                let retired = {
+                    let mut registry = cancel_state.redesign_identify.lock().unwrap();
+                    let owned = matches!(
+                        registry.lease.as_ref(),
+                        Some(super::RedesignIdentifyLease::Cancelling {
+                            attempt: owner,
+                            generation: owner_generation,
+                        }) if owner == &cancel_attempt && *owner_generation == generation
+                    );
+                    if owned {
+                        registry.lease = None;
+                        registry.remember_terminal(
+                            cancel_attempt.clone(),
+                            super::RedesignIdentifyTerminal::Cancelled,
+                        );
+                    }
+                    owned
+                };
+                if retired {
+                    cancel_state.redesign_identify_changed.notify_waiters();
+                }
+            })
+            .await;
+            redesign_redirect(RD_IDENTIFY_CANCELLED)
+        }
+    }
 }
 
 // ── The controller verbs: the rack's add / reorder / remove ────────────────

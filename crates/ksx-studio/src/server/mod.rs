@@ -138,6 +138,11 @@ struct AppState {
     /// a non-Escape hit wins, making "cancelled" and "selected" mutually
     /// exclusive outcomes at one server-owned boundary.
     redesign_identify: std::sync::Mutex<RedesignIdentifyRegistry>,
+    /// Wakes an exact cancellation that arrived while its start worker was
+    /// still crossing the Pending -> daemon-generation boundary. A Pending
+    /// cancellation is not acknowledged until that worker has either stayed
+    /// out of the daemon or exact-cancelled the generation it opened.
+    redesign_identify_changed: tokio::sync::Notify,
     /// Supplies an opaque owner for a no-JS identify submit. Enhanced clients
     /// provide their own nonce; the static form cannot, and must still never
     /// share a cancellable identity with a later request.
@@ -166,6 +171,16 @@ enum RedesignIdentifyLease {
     /// about to open the daemon learner. The worker consumes this marker and
     /// exact-cancels any generation that appeared in the meantime.
     Cancelled { attempt: String },
+    /// Cancel reached an Active generation. The cancellation task owns this
+    /// marker until the exact daemon generation has stopped; duplicate exact
+    /// cancels wait for its retirement instead of reporting success early.
+    Cancelling { attempt: String, generation: u64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RedesignIdentifyTerminal {
+    Answered,
+    Cancelled,
 }
 
 #[derive(Debug, Default)]
@@ -176,10 +191,16 @@ struct RedesignIdentifyRegistry {
     /// A and allows A's delayed start to open invisibly. This queue is bounded
     /// because same-origin callers can abandon requests forever.
     pre_cancelled: std::collections::VecDeque<String>,
+    /// Retired nonces remain idempotent across navigation retries. Without
+    /// this bounded ledger, a duplicate cleanup after a completed answer is
+    /// indistinguishable from Cancel-before-Start and can falsely promise
+    /// that nothing changed.
+    terminal: std::collections::VecDeque<(String, RedesignIdentifyTerminal)>,
 }
 
 impl RedesignIdentifyRegistry {
     const PRE_CANCELLED_LIMIT: usize = 64;
+    const TERMINAL_LIMIT: usize = 64;
 
     fn remember_pre_cancelled(&mut self, attempt: String) {
         if let Some(index) = self
@@ -201,6 +222,27 @@ impl RedesignIdentifyRegistry {
         };
         self.pre_cancelled.remove(index);
         true
+    }
+
+    fn remember_terminal(&mut self, attempt: String, outcome: RedesignIdentifyTerminal) {
+        if let Some(index) = self
+            .terminal
+            .iter()
+            .position(|(saved, _)| saved == &attempt)
+        {
+            self.terminal.remove(index);
+        }
+        self.terminal.push_back((attempt, outcome));
+        while self.terminal.len() > Self::TERMINAL_LIMIT {
+            self.terminal.pop_front();
+        }
+    }
+
+    fn terminal(&self, attempt: &str) -> Option<RedesignIdentifyTerminal> {
+        self.terminal
+            .iter()
+            .rev()
+            .find_map(|(saved, outcome)| (saved == attempt).then_some(*outcome))
     }
 }
 
@@ -366,6 +408,7 @@ pub fn serve(
         redesign_parked: std::sync::Mutex::new(Vec::new()),
         redesign_undo: std::sync::Mutex::new(None),
         redesign_identify: std::sync::Mutex::new(RedesignIdentifyRegistry::default()),
+        redesign_identify_changed: tokio::sync::Notify::new(),
         redesign_identify_sequence: std::sync::atomic::AtomicU64::new(1),
         machine_cache: MachineCache::new(),
     });

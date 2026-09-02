@@ -2331,6 +2331,156 @@ pub(super) enum StartIdentifyResult {
     Cancelled,
 }
 
+/// A blocking identify worker is detached when its HTTP owner disappears.
+/// Consequently panic retirement must live inside that worker rather than in
+/// the async JoinHandle waiter. Keep a generation-bearing lease published
+/// until best-effort exact cancellation returns, then publish one terminal
+/// outcome and wake every duplicate Cancel waiting on that owner.
+fn retire_panicked_identify_worker(
+    state: &AppState,
+    attempt: &str,
+    opened_generation: Option<u64>,
+) {
+    enum CancelPlan {
+        None,
+        Exact(u64),
+    }
+
+    let plan = {
+        let mut registry = match state.redesign_identify.lock() {
+            Ok(registry) => registry,
+            Err(poisoned) => {
+                let registry = poisoned.into_inner();
+                // Repair and clear while the recovered guard is still held;
+                // no ordinary `.lock().unwrap()` caller can observe the
+                // poisoned mutex in between those operations.
+                state.redesign_identify.clear_poison();
+                registry
+            }
+        };
+        match registry.lease.clone() {
+            Some(super::RedesignIdentifyLease::Pending { attempt: owner }) if owner == attempt => {
+                registry.lease = Some(match opened_generation {
+                    Some(generation) => super::RedesignIdentifyLease::Cancelling {
+                        attempt: attempt.to_owned(),
+                        generation,
+                    },
+                    None => super::RedesignIdentifyLease::Cancelled {
+                        attempt: attempt.to_owned(),
+                    },
+                });
+                Some((
+                    opened_generation.map_or(CancelPlan::None, CancelPlan::Exact),
+                    super::RedesignIdentifyTerminal::Cancelled,
+                ))
+            }
+            Some(super::RedesignIdentifyLease::Cancelled { attempt: owner })
+                if owner == attempt =>
+            {
+                if let Some(generation) = opened_generation {
+                    registry.lease = Some(super::RedesignIdentifyLease::Cancelling {
+                        attempt: attempt.to_owned(),
+                        generation,
+                    });
+                }
+                Some((
+                    opened_generation.map_or(CancelPlan::None, CancelPlan::Exact),
+                    super::RedesignIdentifyTerminal::Cancelled,
+                ))
+            }
+            Some(super::RedesignIdentifyLease::Active {
+                attempt: owner,
+                generation,
+            }) if owner == attempt => {
+                registry.lease = Some(super::RedesignIdentifyLease::Cancelling {
+                    attempt: attempt.to_owned(),
+                    generation,
+                });
+                Some((
+                    CancelPlan::Exact(generation),
+                    super::RedesignIdentifyTerminal::Cancelled,
+                ))
+            }
+            // An Active cancel route installs this marker before spawning its
+            // own self-retiring blocking cancellation. Do not race that owner
+            // with a second cancellation that could return first.
+            Some(super::RedesignIdentifyLease::Cancelling { attempt: owner, .. })
+                if owner == attempt =>
+            {
+                None
+            }
+            Some(super::RedesignIdentifyLease::Resolving {
+                attempt: owner,
+                generation,
+            }) if owner == attempt => Some((
+                CancelPlan::Exact(generation),
+                super::RedesignIdentifyTerminal::Answered,
+            )),
+            Some(_) | None => None,
+        }
+    };
+    let Some((plan, terminal)) = plan else {
+        return;
+    };
+
+    // If learn_start itself panicked there is no trustworthy generation to
+    // cancel. Never fall back to an unqualified cancellation: mapper learning
+    // is a separate API and could have opened a newer listener. A dead worker
+    // cannot stage, and the next start supersedes any unknowable orphan.
+    let cancel_generation = match plan {
+        CancelPlan::None => None,
+        CancelPlan::Exact(generation) => Some(generation),
+    };
+    // Production control sources report cancellation failures as a view, not
+    // a panic. Contain a faulty in-process provider as well so a second panic
+    // cannot unwind out of this detached worker and strand the lease again.
+    if let Some(generation) = cancel_generation {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            state.control.learn_cancel_generation(Some(generation))
+        }));
+    }
+
+    let retired = {
+        let mut registry = match state.redesign_identify.lock() {
+            Ok(registry) => registry,
+            Err(poisoned) => {
+                let registry = poisoned.into_inner();
+                state.redesign_identify.clear_poison();
+                registry
+            }
+        };
+        let owned = match (registry.lease.as_ref(), terminal) {
+            (
+                Some(super::RedesignIdentifyLease::Cancelled { attempt: owner }),
+                super::RedesignIdentifyTerminal::Cancelled,
+            ) => owner == attempt,
+            (
+                Some(super::RedesignIdentifyLease::Cancelling {
+                    attempt: owner,
+                    generation: owner_generation,
+                }),
+                super::RedesignIdentifyTerminal::Cancelled,
+            ) => owner == attempt && Some(*owner_generation) == cancel_generation,
+            (
+                Some(super::RedesignIdentifyLease::Resolving {
+                    attempt: owner,
+                    generation: owner_generation,
+                }),
+                super::RedesignIdentifyTerminal::Answered,
+            ) => owner == attempt && Some(*owner_generation) == cancel_generation,
+            _ => false,
+        };
+        if owned {
+            registry.lease = None;
+            registry.remember_terminal(attempt.to_owned(), terminal);
+        }
+        owned
+    };
+    if retired {
+        state.redesign_identify_changed.notify_waiters();
+    }
+}
+
 /// One cancellable identify transaction for the redesign. The browser nonce
 /// and daemon generation stay paired in the server-owned registry, so a late
 /// cancel from one tab cannot stop another tab's listener or stage after a
@@ -2339,215 +2489,444 @@ pub(super) async fn identify_and_stage_for_redesign(
     state: Arc<AppState>,
     attempt: String,
 ) -> StartIdentifyResult {
-    let cleanup_attempt = attempt.clone();
-    let worker_state = Arc::clone(&state);
     let result = tokio::task::spawn_blocking(move || {
-        {
-            let mut registry = state.redesign_identify.lock().unwrap();
-            match registry.lease.as_ref() {
-                Some(super::RedesignIdentifyLease::Pending { attempt: owner })
-                    if owner == &attempt => {}
-                Some(super::RedesignIdentifyLease::Cancelled { attempt: owner })
-                    if owner == &attempt =>
-                {
-                    registry.lease = None;
-                    return StartIdentifyResult::Cancelled;
-                }
-                Some(_) => return StartIdentifyResult::Busy,
-                None => return StartIdentifyResult::Failed,
-            }
-        }
-        let mut learn = state.control.learn_start();
-        let Some(generation) = learn.generation else {
-            let mut registry = state.redesign_identify.lock().unwrap();
-            let cancelled = matches!(
-                registry.lease.as_ref(),
-                Some(super::RedesignIdentifyLease::Cancelled { attempt: owner })
-                    if owner == &attempt
-            );
-            if matches!(
-                registry.lease.as_ref(),
-                Some(super::RedesignIdentifyLease::Pending { attempt: owner })
-                    if owner == &attempt
-            ) || cancelled
+        let opened_generation = std::cell::Cell::new(None);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             {
-                registry.lease = None;
-            }
-            return if cancelled {
-                StartIdentifyResult::Cancelled
-            } else {
-                StartIdentifyResult::Failed
-            };
-        };
-        enum Transition {
-            Active,
-            Cancelled,
-            Lost,
-        }
-        let transition = {
-            let mut registry = state.redesign_identify.lock().unwrap();
-            match registry.lease.as_ref() {
-                Some(super::RedesignIdentifyLease::Pending { attempt: owner })
-                    if owner == &attempt =>
-                {
-                    registry.lease = Some(super::RedesignIdentifyLease::Active {
-                        attempt: attempt.clone(),
-                        generation,
-                    });
-                    Transition::Active
-                }
-                Some(super::RedesignIdentifyLease::Cancelled { attempt: owner })
-                    if owner == &attempt =>
-                {
-                    registry.lease = None;
-                    Transition::Cancelled
-                }
-                _ => Transition::Lost,
-            }
-        };
-        if !matches!(transition, Transition::Active) {
-            let _ = state.control.learn_cancel_generation(Some(generation));
-            return if matches!(transition, Transition::Cancelled) {
-                StartIdentifyResult::Cancelled
-            } else {
-                StartIdentifyResult::Failed
-            };
-        }
-        let finish = |outcome| {
-            let mut registry = state.redesign_identify.lock().unwrap();
-            if registry.lease.as_ref().is_some_and(|lease| {
-                matches!(
-                    lease,
-                    super::RedesignIdentifyLease::Active {
-                        attempt: owner,
-                        generation: owner_generation,
-                    } | super::RedesignIdentifyLease::Resolving {
-                        attempt: owner,
-                        generation: owner_generation,
-                    } if owner == &attempt && *owner_generation == generation
-                )
-            }) {
-                registry.lease = None;
-            }
-            outcome
-        };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(11);
-        loop {
-            if !learn.ok || learn.generation != Some(generation) {
-                return finish(StartIdentifyResult::Failed);
-            }
-            match learn.state.as_str() {
-                "hit" => {
-                    if learn
-                        .key
-                        .as_deref()
-                        .is_some_and(|key| key.eq_ignore_ascii_case("Escape"))
+                let mut registry = state.redesign_identify.lock().unwrap();
+                match registry.lease.as_ref() {
+                    Some(super::RedesignIdentifyLease::Pending { attempt: owner })
+                        if owner == &attempt => {}
+                    Some(super::RedesignIdentifyLease::Cancelled { attempt: owner })
+                        if owner == &attempt =>
                     {
-                        let _ = state.control.learn_cancel_generation(Some(generation));
-                        return finish(StartIdentifyResult::Cancelled);
+                        registry.lease = None;
+                        registry.remember_terminal(
+                            attempt.clone(),
+                            super::RedesignIdentifyTerminal::Cancelled,
+                        );
+                        drop(registry);
+                        state.redesign_identify_changed.notify_waiters();
+                        return StartIdentifyResult::Cancelled;
                     }
+                    Some(_) => return StartIdentifyResult::Busy,
+                    None => return StartIdentifyResult::Failed,
+                }
+            }
+            let mut learn = state.control.learn_start();
+            opened_generation.set(learn.generation);
+            let Some(generation) = learn.generation else {
+                let mut registry = state.redesign_identify.lock().unwrap();
+                let cancelled = matches!(
+                    registry.lease.as_ref(),
+                    Some(super::RedesignIdentifyLease::Cancelled { attempt: owner })
+                        if owner == &attempt
+                );
+                let owned = matches!(
+                    registry.lease.as_ref(),
+                    Some(super::RedesignIdentifyLease::Pending { attempt: owner })
+                        if owner == &attempt
+                ) || cancelled;
+                if owned {
+                    registry.lease = None;
+                    registry.remember_terminal(
+                        attempt.clone(),
+                        super::RedesignIdentifyTerminal::Cancelled,
+                    );
+                }
+                drop(registry);
+                if cancelled {
+                    state.redesign_identify_changed.notify_waiters();
+                }
+                return if cancelled {
+                    StartIdentifyResult::Cancelled
+                } else {
+                    StartIdentifyResult::Failed
+                };
+            };
+            enum Transition {
+                Active,
+                Cancelled,
+                Lost,
+            }
+            let transition = {
+                let mut registry = state.redesign_identify.lock().unwrap();
+                match registry.lease.as_ref() {
+                    Some(super::RedesignIdentifyLease::Pending { attempt: owner })
+                        if owner == &attempt =>
                     {
-                        let mut registry = state.redesign_identify.lock().unwrap();
-                        if !registry.lease.as_ref().is_some_and(|lease| {
-                            matches!(
-                                lease,
-                                super::RedesignIdentifyLease::Active {
-                                    attempt: owner,
-                                    generation: owner_generation,
-                                } if owner == &attempt && *owner_generation == generation
-                            )
-                        }) {
-                            return StartIdentifyResult::Failed;
-                        }
-                        registry.lease = Some(super::RedesignIdentifyLease::Resolving {
+                        registry.lease = Some(super::RedesignIdentifyLease::Active {
                             attempt: attempt.clone(),
                             generation,
                         });
+                        Transition::Active
                     }
-                    let Some(observed_instance) = learn
-                        .device
-                        .as_deref()
-                        .filter(|instance| !instance.trim().is_empty())
-                    else {
-                        return finish(StartIdentifyResult::Failed);
-                    };
-                    let identified = match state.machine.device_identify(observed_instance) {
-                        Ok(identified) => identified,
-                        Err(_) => return finish(StartIdentifyResult::Failed),
-                    };
-                    let selector = identified.selector;
-                    return finish(
-                        match upsert_device_preserving_preparation(
-                            &state,
-                            selector.clone(),
-                            identified.alias,
-                            identified.label,
-                        ) {
-                            DeviceChoice::Chosen | DeviceChoice::Unchanged => {
-                                StartIdentifyResult::Selected(selector)
-                            }
-                            DeviceChoice::Refused => StartIdentifyResult::Failed,
-                        },
-                    );
-                }
-                "listening" => {
-                    if std::time::Instant::now() >= deadline {
-                        let _ = state.control.learn_cancel_generation(Some(generation));
-                        return finish(StartIdentifyResult::TimedOut);
+                    Some(super::RedesignIdentifyLease::Cancelled { attempt: owner })
+                        if owner == &attempt =>
+                    {
+                        registry.lease = Some(super::RedesignIdentifyLease::Cancelling {
+                            attempt: attempt.clone(),
+                            generation,
+                        });
+                        Transition::Cancelled
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    learn = state.control.learn_poll();
+                    _ => Transition::Lost,
                 }
-                "timeout" => return finish(StartIdentifyResult::TimedOut),
-                "idle" | "cancelled" | "failed" | "unavailable" | "unknown" => {
+            };
+            if !matches!(transition, Transition::Active) {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    state.control.learn_cancel_generation(Some(generation))
+                }));
+                if matches!(transition, Transition::Cancelled) {
+                    let retired = {
+                        let mut registry = state.redesign_identify.lock().unwrap();
+                        let owned = matches!(
+                            registry.lease.as_ref(),
+                            Some(super::RedesignIdentifyLease::Cancelling {
+                                attempt: owner,
+                                generation: owner_generation,
+                            }) if owner == &attempt && *owner_generation == generation
+                        );
+                        if owned {
+                            registry.lease = None;
+                            registry.remember_terminal(
+                                attempt.clone(),
+                                super::RedesignIdentifyTerminal::Cancelled,
+                            );
+                        }
+                        owned
+                    };
+                    if retired {
+                        state.redesign_identify_changed.notify_waiters();
+                    }
+                }
+                return if matches!(transition, Transition::Cancelled) {
+                    StartIdentifyResult::Cancelled
+                } else {
+                    StartIdentifyResult::Failed
+                };
+            }
+            let finish = |outcome: StartIdentifyResult| {
+                let mut registry = state.redesign_identify.lock().unwrap();
+                let terminal = match registry.lease.as_ref() {
+                    Some(super::RedesignIdentifyLease::Active {
+                        attempt: owner,
+                        generation: owner_generation,
+                    }) if owner == &attempt && *owner_generation == generation => {
+                        Some(super::RedesignIdentifyTerminal::Cancelled)
+                    }
+                    Some(super::RedesignIdentifyLease::Resolving {
+                        attempt: owner,
+                        generation: owner_generation,
+                    }) if owner == &attempt && *owner_generation == generation => {
+                        Some(super::RedesignIdentifyTerminal::Answered)
+                    }
+                    _ => None,
+                };
+                if let Some(terminal) = terminal {
+                    registry.lease = None;
+                    registry.remember_terminal(attempt.clone(), terminal);
+                }
+                let retired = terminal.is_some();
+                drop(registry);
+                if retired {
+                    state.redesign_identify_changed.notify_waiters();
+                }
+                outcome
+            };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(11);
+            loop {
+                if !learn.ok || learn.generation != Some(generation) {
                     return finish(StartIdentifyResult::Failed);
                 }
-                _ => return finish(StartIdentifyResult::Failed),
+                match learn.state.as_str() {
+                    "hit" => {
+                        if learn
+                            .key
+                            .as_deref()
+                            .is_some_and(|key| key.eq_ignore_ascii_case("Escape"))
+                        {
+                            let _ = state.control.learn_cancel_generation(Some(generation));
+                            return finish(StartIdentifyResult::Cancelled);
+                        }
+                        {
+                            let mut registry = state.redesign_identify.lock().unwrap();
+                            if !registry.lease.as_ref().is_some_and(|lease| {
+                                matches!(
+                                    lease,
+                                    super::RedesignIdentifyLease::Active {
+                                        attempt: owner,
+                                        generation: owner_generation,
+                                    } if owner == &attempt && *owner_generation == generation
+                                )
+                            }) {
+                                return StartIdentifyResult::Failed;
+                            }
+                            registry.lease = Some(super::RedesignIdentifyLease::Resolving {
+                                attempt: attempt.clone(),
+                                generation,
+                            });
+                        }
+                        let Some(observed_instance) = learn
+                            .device
+                            .as_deref()
+                            .filter(|instance| !instance.trim().is_empty())
+                        else {
+                            return finish(StartIdentifyResult::Failed);
+                        };
+                        let identified = match state.machine.device_identify(observed_instance) {
+                            Ok(identified) => identified,
+                            Err(_) => return finish(StartIdentifyResult::Failed),
+                        };
+                        let selector = identified.selector;
+                        return finish(
+                            match upsert_device_preserving_preparation(
+                                &state,
+                                selector.clone(),
+                                identified.alias,
+                                identified.label,
+                            ) {
+                                DeviceChoice::Chosen | DeviceChoice::Unchanged => {
+                                    StartIdentifyResult::Selected(selector)
+                                }
+                                DeviceChoice::Refused => StartIdentifyResult::Failed,
+                            },
+                        );
+                    }
+                    "listening" => {
+                        if std::time::Instant::now() >= deadline {
+                            let _ = state.control.learn_cancel_generation(Some(generation));
+                            return finish(StartIdentifyResult::TimedOut);
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        learn = state.control.learn_poll();
+                    }
+                    "timeout" => return finish(StartIdentifyResult::TimedOut),
+                    "idle" | "cancelled" | "failed" | "unavailable" | "unknown" => {
+                        return finish(StartIdentifyResult::Failed);
+                    }
+                    _ => return finish(StartIdentifyResult::Failed),
+                }
+            }
+        }));
+        match result {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                retire_panicked_identify_worker(&state, &attempt, opened_generation.get());
+                StartIdentifyResult::Failed
             }
         }
     })
     .await;
-    match result {
-        Ok(outcome) => outcome,
-        Err(_) => {
-            let generation = {
-                let mut registry = worker_state.redesign_identify.lock().unwrap();
-                let generation = match registry.lease.as_ref() {
-                    Some(super::RedesignIdentifyLease::Active {
-                        attempt: owner,
-                        generation,
-                    })
-                    | Some(super::RedesignIdentifyLease::Resolving {
-                        attempt: owner,
-                        generation,
-                    }) if owner == &cleanup_attempt => Some(*generation),
-                    _ => None,
-                };
-                let owned = match registry.lease.as_ref() {
-                    Some(super::RedesignIdentifyLease::Pending { attempt: owner }) => {
-                        owner == &cleanup_attempt
-                    }
-                    Some(super::RedesignIdentifyLease::Active { attempt: owner, .. })
-                    | Some(super::RedesignIdentifyLease::Resolving { attempt: owner, .. })
-                    | Some(super::RedesignIdentifyLease::Cancelled { attempt: owner }) => {
-                        owner == &cleanup_attempt
-                    }
-                    _ => false,
-                };
-                if owned {
-                    registry.lease = None;
-                }
-                generation
-            };
-            if let Some(generation) = generation {
-                let _ = tokio::task::spawn_blocking(move || {
-                    worker_state
-                        .control
-                        .learn_cancel_generation(Some(generation))
-                })
-                .await;
-            }
-            StartIdentifyResult::Failed
+    result.unwrap_or(StartIdentifyResult::Failed)
+}
+
+#[cfg(test)]
+mod identify_worker_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    struct NullStatus;
+
+    impl StatusSource for NullStatus {
+        fn snapshot(&self) -> crate::snapshot::StatusSnapshot {
+            crate::snapshot::StatusSnapshot::default()
         }
+    }
+
+    struct NullMachine;
+    impl ksx_api::MachineSource for NullMachine {}
+
+    #[derive(Clone)]
+    struct AbortPanicControl {
+        generation: Arc<AtomicU64>,
+        poll_entered: Arc<AtomicBool>,
+        poll_release: Arc<AtomicBool>,
+        panic_once: Arc<AtomicBool>,
+        cancel_entered: Arc<AtomicBool>,
+        cancel_release: Arc<AtomicBool>,
+        cancelled: Arc<Mutex<Vec<Option<u64>>>>,
+    }
+
+    impl AbortPanicControl {
+        fn new() -> Self {
+            Self {
+                generation: Arc::new(AtomicU64::new(0)),
+                poll_entered: Arc::new(AtomicBool::new(false)),
+                poll_release: Arc::new(AtomicBool::new(false)),
+                panic_once: Arc::new(AtomicBool::new(true)),
+                cancel_entered: Arc::new(AtomicBool::new(false)),
+                cancel_release: Arc::new(AtomicBool::new(false)),
+                cancelled: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn view(ok: bool, state: &str, generation: Option<u64>) -> ksx_api::LearnView {
+            ksx_api::LearnView {
+                ok,
+                state: state.to_owned(),
+                generation,
+                remaining_ms: None,
+                device: None,
+                key: None,
+                error: (!ok).then(|| "scripted terminal learner".to_owned()),
+            }
+        }
+    }
+
+    impl ControlSource for AbortPanicControl {
+        fn session(&self) -> SessionView {
+            SessionView::unreachable("test")
+        }
+
+        fn start(&self, _profile: Option<&str>) -> Result<String, ksx_api::Refusal> {
+            Err(ksx_api::Refusal::new(ksx_api::codes::REFUSED, "test"))
+        }
+
+        fn stop(&self) -> Result<String, ksx_api::Refusal> {
+            Err(ksx_api::Refusal::new(ksx_api::codes::REFUSED, "test"))
+        }
+
+        fn reload(&self) -> Result<String, ksx_api::Refusal> {
+            Err(ksx_api::Refusal::new(ksx_api::codes::REFUSED, "test"))
+        }
+
+        fn learn_start(&self) -> ksx_api::LearnView {
+            let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            Self::view(true, "listening", Some(generation))
+        }
+
+        fn learn_poll(&self) -> ksx_api::LearnView {
+            if self.panic_once.swap(false, Ordering::SeqCst) {
+                self.poll_entered.store(true, Ordering::SeqCst);
+                while !self.poll_release.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                panic!("scripted detached identify-worker panic");
+            }
+            Self::view(
+                false,
+                "failed",
+                Some(self.generation.load(Ordering::SeqCst)),
+            )
+        }
+
+        fn learn_cancel_generation(&self, generation: Option<u64>) -> ksx_api::LearnView {
+            self.cancel_entered.store(true, Ordering::SeqCst);
+            while !self.cancel_release.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            self.cancelled.lock().unwrap().push(generation);
+            Self::view(true, "cancelled", generation)
+        }
+    }
+
+    fn identify_state(control: AbortPanicControl) -> Arc<AppState> {
+        Arc::new(AppState {
+            check_page: LivePage::load("/check").expect("load check page"),
+            pads_page: LivePage::load("/pads").expect("load pads page"),
+            devices_page: LivePage::load("/devices").expect("load devices page"),
+            redesign_page: LivePage::load("/redesign").expect("load redesign page"),
+            source: Box::new(NullStatus),
+            control: Box::new(control),
+            machine: Box::new(NullMachine),
+            live: Arc::new(ksx_api::NoLiveSource::new("test")),
+            redesign_parked: Mutex::new(Vec::new()),
+            redesign_undo: Mutex::new(None),
+            redesign_identify: Mutex::new(RedesignIdentifyRegistry::default()),
+            redesign_identify_changed: tokio::sync::Notify::new(),
+            redesign_identify_sequence: AtomicU64::new(1),
+            machine_cache: MachineCache::new(),
+        })
+    }
+
+    async fn wait_for_flag(flag: &AtomicBool, failure: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !flag.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{failure}"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn aborted_owner_leaves_detached_worker_self_retiring_and_generation_fenced() {
+        const FIRST: &str = "aborted-owner-a";
+        const SECOND: &str = "aborted-owner-b";
+        let control = AbortPanicControl::new();
+        let state = identify_state(control.clone());
+        state.redesign_identify.lock().unwrap().lease = Some(RedesignIdentifyLease::Pending {
+            attempt: FIRST.to_owned(),
+        });
+
+        let owner_state = Arc::clone(&state);
+        let owner = tokio::spawn(async move {
+            identify_and_stage_for_redesign(owner_state, FIRST.to_owned()).await
+        });
+        wait_for_flag(
+            &control.poll_entered,
+            "worker never entered its held panic seam",
+        )
+        .await;
+        owner.abort();
+        assert!(
+            owner
+                .await
+                .expect_err("request owner unexpectedly completed")
+                .is_cancelled(),
+            "the test did not explicitly drop the spawn_blocking JoinHandle owner"
+        );
+
+        control.poll_release.store(true, Ordering::SeqCst);
+        wait_for_flag(
+            &control.cancel_entered,
+            "detached worker never began exact panic cancellation",
+        )
+        .await;
+        let (held_lease, held_terminal) = {
+            let registry = state.redesign_identify.lock().unwrap();
+            (registry.lease.clone(), registry.terminal(FIRST))
+        };
+        control.cancel_release.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            held_lease.as_ref(),
+            Some(RedesignIdentifyLease::Cancelling {
+                attempt,
+                generation: 1,
+            }) if attempt == FIRST
+        ));
+        assert_eq!(held_terminal, None);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let retired = {
+                    let registry = state.redesign_identify.lock().unwrap();
+                    registry.lease.is_none()
+                        && registry.terminal(FIRST) == Some(RedesignIdentifyTerminal::Cancelled)
+                };
+                if retired {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached worker never published terminal retirement");
+        assert_eq!(
+            control.cancelled.lock().unwrap().as_slice(),
+            [Some(1)],
+            "panic cleanup did not cancel exactly generation one"
+        );
+
+        state.redesign_identify.lock().unwrap().lease = Some(RedesignIdentifyLease::Pending {
+            attempt: SECOND.to_owned(),
+        });
+        let successor =
+            identify_and_stage_for_redesign(Arc::clone(&state), SECOND.to_owned()).await;
+        assert_eq!(successor, StartIdentifyResult::Failed);
+        assert_ne!(successor, StartIdentifyResult::Busy);
+        assert_eq!(control.generation.load(Ordering::SeqCst), 2);
+        assert_eq!(control.cancelled.lock().unwrap().as_slice(), [Some(1)]);
     }
 }

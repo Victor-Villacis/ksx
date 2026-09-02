@@ -287,10 +287,11 @@ try {
     // controller parking, and fixed-size overview doors into device-local
     // controls, guarded recovery focus, and the progressively-enhanced policy
     // radiogroup, visible lifecycle guidance, and focus-safe, fully bounded
-    // proximity navigation bring the measured pass to 306,454 Brotli bytes.
+    // proximity navigation and exact-listener navigation recovery bring the
+    // measured pass to 307,105 Brotli bytes.
     // Keep only 50 bytes of headroom so this interaction safety work cannot
     // turn into an open-ended budget.
-    budgetThreshold: 306_504,
+    budgetThreshold: 307_155,
     ssr: true,
     ssrEntryPoints: {
       check: "src/check.ts",

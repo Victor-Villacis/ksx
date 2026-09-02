@@ -223,6 +223,20 @@ struct ScriptedControl {
     committed: AtomicBool,
     learning: AtomicBool,
     learn_generation: AtomicUsize,
+    /// Holds `learn_start` after the HTTP worker has reserved its browser
+    /// nonce but before a daemon generation exists. The identify cancellation
+    /// fence regression uses this to make the Pending race deterministic.
+    learn_start_hold: AtomicBool,
+    learn_start_entered: AtomicBool,
+    /// One-shot panic seams prove a detached identify worker retires its own
+    /// Pending and Active leases even after the HTTP connection disappears.
+    learn_start_panic: AtomicBool,
+    learn_poll_panic: AtomicBool,
+    /// Holds exact generation cancellation so duplicate-cancel retirement can
+    /// be observed without depending on scheduler timing.
+    learn_cancel_hold: AtomicBool,
+    learn_cancel_entered: AtomicBool,
+    learn_cancel_calls: AtomicUsize,
     input_test_generation: AtomicUsize,
     input_test_spec: Mutex<Option<ksx_api::InputTestSpec>>,
     input_test_cancelled: AtomicBool,
@@ -272,6 +286,13 @@ impl ScriptedControl {
             committed: AtomicBool::new(false),
             learning: AtomicBool::new(false),
             learn_generation: AtomicUsize::new(0),
+            learn_start_hold: AtomicBool::new(false),
+            learn_start_entered: AtomicBool::new(false),
+            learn_start_panic: AtomicBool::new(false),
+            learn_poll_panic: AtomicBool::new(false),
+            learn_cancel_hold: AtomicBool::new(false),
+            learn_cancel_entered: AtomicBool::new(false),
+            learn_cancel_calls: AtomicUsize::new(0),
             input_test_generation: AtomicUsize::new(0),
             input_test_spec: Mutex::new(None),
             input_test_cancelled: AtomicBool::new(false),
@@ -472,6 +493,16 @@ impl ControlSource for ScriptedControl {
         if self.no_daemon {
             return LearnView::unavailable(NO_CHANNEL);
         }
+        if self.learn_start_hold.load(Ordering::SeqCst) {
+            self.learn_start_entered.store(true, Ordering::SeqCst);
+            while self.learn_start_hold.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+        assert!(
+            !self.learn_start_panic.swap(false, Ordering::SeqCst),
+            "scripted panic after entering learn_start"
+        );
         self.learning.store(true, Ordering::SeqCst);
         let generation = self.learn_generation.fetch_add(1, Ordering::SeqCst) + 1;
         LearnView {
@@ -486,6 +517,10 @@ impl ControlSource for ScriptedControl {
     }
 
     fn learn_poll(&self) -> LearnView {
+        assert!(
+            !self.learn_poll_panic.swap(false, Ordering::SeqCst),
+            "scripted panic while polling an active learner"
+        );
         if self.learning.load(Ordering::SeqCst) {
             if let Some((device, key)) = self.identify_hit.lock().unwrap().take() {
                 self.learning.store(false, Ordering::SeqCst);
@@ -535,6 +570,13 @@ impl ControlSource for ScriptedControl {
     }
 
     fn learn_cancel_generation(&self, generation: Option<u64>) -> LearnView {
+        self.learn_cancel_calls.fetch_add(1, Ordering::SeqCst);
+        if self.learn_cancel_hold.load(Ordering::SeqCst) {
+            self.learn_cancel_entered.store(true, Ordering::SeqCst);
+            while self.learn_cancel_hold.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
         let current = self.learn_generation.load(Ordering::SeqCst) as u64;
         if generation.is_some_and(|generation| generation != current) {
             return self.learn_poll();
@@ -4806,6 +4848,316 @@ fn redesign_identify_cancel_stops_only_its_pending_generation() {
     );
 }
 
+/// A pagehide cancel can reach Studio after the start route reserved its
+/// browser nonce but while the blocking daemon call is still opening. Once
+/// that cancel response says "cancelled", the Pending worker must be fully
+/// fenced: the next page's different nonce can start immediately rather than
+/// observing a transient Busy marker, and the retired worker cannot touch it.
+#[test]
+fn redesign_identify_pending_cancel_acknowledgement_fences_the_next_attempt() {
+    let control = Arc::new(ScriptedControl::new(false));
+    control.learn_start_hold.store(true, Ordering::SeqCst);
+    let addr = start_server(Arc::clone(&control));
+
+    let first = std::thread::spawn(move || {
+        post_form(
+            addr,
+            "/redesign/device/identify",
+            "attempt=pendingaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+    });
+    let entered_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !control.learn_start_entered.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < entered_deadline,
+            "the first identify worker never reached its held Pending boundary"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    // On the broken implementation the Pending cancel answers immediately.
+    // Keep learn_start held in that case until the second POST has exposed the
+    // stale Cancelled lease. On the fixed implementation Cancel blocks, so the
+    // timeout releases the worker and lets the exact fence finish.
+    let (cancel_returned_tx, cancel_returned_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_after_retry_tx, release_after_retry_rx) = std::sync::mpsc::sync_channel(1);
+    let release_control = Arc::clone(&control);
+    let release = std::thread::spawn(move || {
+        if cancel_returned_rx
+            .recv_timeout(Duration::from_secs(2))
+            .is_ok()
+        {
+            let _ = release_after_retry_rx.recv_timeout(Duration::from_secs(5));
+        }
+        release_control
+            .learn_start_hold
+            .store(false, Ordering::SeqCst);
+    });
+
+    let cancelled = post_form(
+        addr,
+        "/redesign/device/identify/cancel",
+        "attempt=pendingaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    let _ = cancel_returned_tx.send(());
+    assert!(
+        cancelled.contains("Keyboard%20identification%20cancelled"),
+        "{cancelled}"
+    );
+
+    *control.identify_hit.lock().unwrap() = Some((IPAC_KB.into(), "A".into()));
+    let second = post_form(
+        addr,
+        "/redesign/device/identify",
+        "attempt=freshbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+    let _ = release_after_retry_tx.send(());
+    release.join().expect("Pending worker release joins");
+    let first = first.join().expect("first identify request joins");
+
+    assert!(
+        first.contains("Keyboard%20identification%20cancelled"),
+        "the retired request did not settle as its exact cancellation: {first}"
+    );
+    assert!(
+        !second.contains("Another%20keyboard%20identification%20is%20already%20listening"),
+        "the acknowledged Pending cancellation leaked a transient Busy lease: {second}"
+    );
+    assert!(
+        second.contains("Keyboard%20identified"),
+        "the next exact attempt did not reach the daemon immediately: {second}"
+    );
+    assert_eq!(
+        control.learn_generation.load(Ordering::SeqCst),
+        2,
+        "the cancelled Pending worker or its successor opened an unexpected generation"
+    );
+}
+
+/// A panic before learn_start returns has no trustworthy generation. Retire
+/// the dead worker without sending an unqualified cancel that could stop the
+/// mapper learner (a separate API), then admit the next exact attempt.
+#[test]
+fn redesign_identify_pending_panic_retires_without_a_broad_cancel() {
+    let control = Arc::new(ScriptedControl::new(false));
+    control.learn_start_panic.store(true, Ordering::SeqCst);
+    let addr = start_server(Arc::clone(&control));
+    let attempt = "pendingpanicowneraaaaaaaaaaaaaaaa";
+    let panicked = post_form(
+        addr,
+        "/redesign/device/identify",
+        &format!("attempt={attempt}"),
+    );
+    assert!(panicked.contains("flash=error"), "{panicked}");
+
+    let retired = post_form(
+        addr,
+        "/redesign/device/identify/cancel",
+        &format!("attempt={attempt}"),
+    );
+    assert!(
+        retired.contains("Keyboard%20identification%20cancelled"),
+        "Pending panic did not publish its terminal nonce: {retired}"
+    );
+    assert!(!control.learning.load(Ordering::SeqCst));
+    assert_eq!(
+        control.learn_cancel_calls.load(Ordering::SeqCst),
+        0,
+        "an unknown-generation panic sent a broad learner cancellation"
+    );
+
+    *control.identify_hit.lock().unwrap() = Some((IPAC_KB.into(), "A".into()));
+    let successor = post_form(
+        addr,
+        "/redesign/device/identify",
+        "attempt=afterpendingpanicbbbbbbbbbbbbbbb",
+    );
+    assert!(
+        successor.contains("Keyboard%20identified"),
+        "Pending panic left every successor Busy: {successor}"
+    );
+    assert_eq!(
+        control.learn_generation.load(Ordering::SeqCst),
+        1,
+        "the panicked learn_start invented a generation before its successor"
+    );
+}
+
+/// Panic retirement is a two-part transaction: the worker is dead, then its
+/// exact daemon generation is stopped. The Cancelling marker must remain
+/// visible throughout the second part or a successor can start in the gap and
+/// a compatibility cancellation can strike that newer listener.
+#[test]
+fn redesign_identify_panic_keeps_successor_fenced_until_exact_cancel_finishes() {
+    let control = Arc::new(ScriptedControl::new(false));
+    control.learn_poll_panic.store(true, Ordering::SeqCst);
+    control.learn_cancel_hold.store(true, Ordering::SeqCst);
+    let addr = start_server(Arc::clone(&control));
+    let first = std::thread::spawn(move || {
+        post_form(
+            addr,
+            "/redesign/device/identify",
+            "attempt=activepanicownerccccccccccccccc",
+        )
+    });
+    let active_deadline = Instant::now() + Duration::from_secs(2);
+    while !control.learning.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < active_deadline,
+            "panic fixture never opened generation one"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let cancel_deadline = Instant::now() + Duration::from_secs(2);
+    while !control.learn_cancel_entered.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < cancel_deadline,
+            "panicked worker never entered its held exact cancellation"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let overtook = Arc::new(AtomicBool::new(false));
+    let release_control = Arc::clone(&control);
+    let release_overtook = Arc::clone(&overtook);
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(250));
+        let started = release_control.learn_generation.load(Ordering::SeqCst) > 1;
+        release_overtook.store(started, Ordering::SeqCst);
+        release_control
+            .learn_cancel_hold
+            .store(false, Ordering::SeqCst);
+        if started {
+            // Keep the intentionally broken ordering from stranding the test
+            // process if this regression ever reappears.
+            let _ = post_form(
+                addr,
+                "/redesign/device/identify/cancel",
+                "attempt=gapattemptdddddddddddddddddddd",
+            );
+        }
+    });
+    let in_gap = post_form(
+        addr,
+        "/redesign/device/identify",
+        "attempt=gapattemptdddddddddddddddddddd",
+    );
+    release.join().expect("panic cancellation release joins");
+    let panicked = first.join().expect("panicked identify request joins");
+
+    assert!(
+        in_gap.contains("Another%20keyboard%20identification%20is%20already%20listening"),
+        "a successor entered before exact panic cleanup finished: {in_gap}"
+    );
+    assert!(
+        !overtook.load(Ordering::SeqCst),
+        "the panic path published retirement before exact cancellation returned"
+    );
+    assert!(panicked.contains("flash=error"), "{panicked}");
+
+    *control.identify_hit.lock().unwrap() = Some((IPAC_KB.into(), "A".into()));
+    let successor = post_form(
+        addr,
+        "/redesign/device/identify",
+        "attempt=afterpaniccleanupeeeeeeeeeeeeee",
+    );
+    assert!(
+        successor.contains("Keyboard%20identified"),
+        "panic cleanup never released its exact lease: {successor}"
+    );
+    assert_eq!(
+        control.learn_generation.load(Ordering::SeqCst),
+        2,
+        "the post-panic successor did not own exactly generation two"
+    );
+}
+
+/// An Active listener can receive the unload beacon and the restored page's
+/// foreground cleanup at nearly the same time. The first exact cancel owns
+/// daemon retirement; the duplicate must not report success while that call is
+/// still in flight or let the next nonce race the old generation.
+#[test]
+fn redesign_identify_active_cancel_fences_duplicate_cleanup_and_retry() {
+    let control = Arc::new(ScriptedControl::new(false));
+    let addr = start_server(Arc::clone(&control));
+    let first = std::thread::spawn(move || {
+        post_form(
+            addr,
+            "/redesign/device/identify",
+            "attempt=activeaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+    });
+    let active_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !control.learning.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < active_deadline,
+            "the first identify request never opened its daemon generation"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    control.learn_cancel_hold.store(true, Ordering::SeqCst);
+    let first_cancel = std::thread::spawn(move || {
+        post_form(
+            addr,
+            "/redesign/device/identify/cancel",
+            "attempt=activeaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+    });
+    let cancel_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !control.learn_cancel_entered.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < cancel_deadline,
+            "the first exact cancel never reached the held daemon boundary"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let release_control = Arc::clone(&control);
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(1));
+        release_control
+            .learn_cancel_hold
+            .store(false, Ordering::SeqCst);
+    });
+    let duplicate = post_form(
+        addr,
+        "/redesign/device/identify/cancel",
+        "attempt=activeaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    let duplicate_overtook_daemon_cancel = control.learn_cancel_hold.load(Ordering::SeqCst);
+    release.join().expect("active cancellation release joins");
+    let cancelled = first_cancel
+        .join()
+        .expect("first active cancellation joins");
+    let _ = first.join().expect("first identify request joins");
+
+    assert!(
+        !duplicate_overtook_daemon_cancel,
+        "duplicate cleanup reported success before exact daemon cancellation finished"
+    );
+    assert!(
+        duplicate.contains("Keyboard%20identification%20cancelled"),
+        "{duplicate}"
+    );
+    assert!(
+        cancelled.contains("Keyboard%20identification%20cancelled"),
+        "{cancelled}"
+    );
+
+    *control.identify_hit.lock().unwrap() = Some((IPAC_KB.into(), "A".into()));
+    let second = post_form(
+        addr,
+        "/redesign/device/identify",
+        "attempt=freshbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+    assert!(
+        second.contains("Keyboard%20identified"),
+        "the retry did not acquire a fresh exact generation: {second}"
+    );
+    assert_eq!(control.learn_generation.load(Ordering::SeqCst), 2);
+}
+
 /// A browser cancellation owns its nonce as well as the daemon generation.
 /// A delayed request from completed tab A must not take tab B's newer lease,
 /// even though B is the transaction currently stored by the server.
@@ -4971,20 +5323,31 @@ fn redesign_identify_hit_wins_before_late_cancel_reports_outcome() {
         std::thread::sleep(Duration::from_millis(2));
     }
 
+    let release_machine = Arc::clone(&machine);
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        release_machine.identify_hold.store(false, Ordering::SeqCst);
+    });
     let late = post_form(
         addr,
         "/redesign/device/identify/cancel",
         "attempt=ffffffffffffffffffffffffffffffff",
     );
+    let staged_when_cancel_answered = control.staged().device.map(|device| device.selector);
     assert!(late.contains("already%20answered"), "{late}");
     assert!(
         !late.contains("Keyboard%20identification%20cancelled"),
         "late Cancel falsely promised that nothing would change: {late}"
     );
 
-    machine.identify_hold.store(false, Ordering::SeqCst);
+    release.join().expect("resolution release joins");
     let identified = identify.join().expect("identify request joins");
     assert!(identified.contains("Keyboard%20identified"), "{identified}");
+    assert_eq!(
+        staged_when_cancel_answered.as_deref(),
+        Some("usb:d209:0430:00"),
+        "already-answered cleanup returned before exact-device staging retired"
+    );
     assert_eq!(
         control
             .staged()
@@ -4993,6 +5356,69 @@ fn redesign_identify_hit_wins_before_late_cancel_reports_outcome() {
             .as_deref(),
         Some("usb:d209:0430:00")
     );
+    let retired_cancel = post_form(
+        addr,
+        "/redesign/device/identify/cancel",
+        "attempt=ffffffffffffffffffffffffffffffff",
+    );
+    assert!(
+        retired_cancel.contains("already%20answered"),
+        "the completed answer lost its terminal nonce: {retired_cancel}"
+    );
+    let duplicate_start = post_form(
+        addr,
+        "/redesign/device/identify",
+        "attempt=ffffffffffffffffffffffffffffffff",
+    );
+    assert!(
+        duplicate_start.contains("already%20answered"),
+        "a duplicate start reopened a completed answer: {duplicate_start}"
+    );
+    assert_eq!(
+        control.learn_generation.load(Ordering::SeqCst),
+        1,
+        "a retired nonce opened a second daemon generation"
+    );
+}
+
+/// Crossing Active -> Resolving is the answer/cancel boundary even when the
+/// subsequent inventory lookup refuses. Every retry for that nonce must keep
+/// the conservative "already answered" outcome; alternating to "cancelled"
+/// would let one document promise that nothing changed after another was told
+/// to refresh authority.
+#[test]
+fn redesign_identify_failed_resolution_keeps_answer_terminal_idempotent() {
+    let control = Arc::new(
+        ScriptedControl::new(false).with_identify_hit("opaque:unmatched-identify-instance"),
+    );
+    let addr = start_server(Arc::clone(&control));
+    let attempt = "resolutionfailureaaaaaaaaaaaaaaaaa";
+
+    let identified = post_form(
+        addr,
+        "/redesign/device/identify",
+        &format!("attempt={attempt}"),
+    );
+    assert!(identified.contains("flash=error"), "{identified}");
+
+    for response in [
+        post_form(
+            addr,
+            "/redesign/device/identify/cancel",
+            &format!("attempt={attempt}"),
+        ),
+        post_form(
+            addr,
+            "/redesign/device/identify",
+            &format!("attempt={attempt}"),
+        ),
+    ] {
+        assert!(
+            response.contains("already%20answered"),
+            "a retired Resolving nonce changed its terminal outcome: {response}"
+        );
+    }
+    assert_eq!(control.learn_generation.load(Ordering::SeqCst), 1);
 }
 
 /// A daemon refusal before generation assignment is a settled failed attempt,

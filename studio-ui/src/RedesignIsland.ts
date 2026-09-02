@@ -5813,6 +5813,16 @@ function positionSharedPolicyEditor(): void {
     physicalShiftY = viewportRect.bottom - margin - placedRect.bottom;
   }
   host.style.setProperty("--rd-policy-shift-y", `${physicalShiftY / scale}px`);
+  // The stage transform is a CSS transition: its destination is written in
+  // one task, while getBoundingClientRect() advances through intermediate
+  // screen positions for the next few paints. Keep the open board editor
+  // clamped on every one of those paints, then take one final measurement
+  // after the canvas clears its animation marker. Without this follow-through,
+  // opening the policy while an Inspector pan is still landing can leave a
+  // correctly positioned popup drifting beyond the clipped viewport.
+  if (viewport.classList.contains("is-camera-animating")) {
+    scheduleSharedPolicyEditorPosition();
+  }
 }
 
 function scheduleSharedPolicyEditorPosition(): void {

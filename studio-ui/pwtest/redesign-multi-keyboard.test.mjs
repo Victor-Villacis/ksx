@@ -554,7 +554,10 @@ describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
 
       const visibleLegendSlots = async (slug) =>
         keyboardNode(page, slug).locator(".n-legend [data-slot]").evaluateAll(
-          (chips) => chips.filter((chip) => !chip.hidden).map((chip) => chip.dataset.slot),
+          (chips) => chips.filter((chip) =>
+            !chip.hidden && getComputedStyle(chip).display !== "none" &&
+            chip.getClientRects().length > 0
+          ).map((chip) => chip.dataset.slot),
         );
       assert.deepEqual(
         await visibleLegendSlots(LEFT_SLUG),
@@ -565,6 +568,14 @@ describe("redesign multi-keyboard canvas", { concurrency: false }, () => {
         await visibleLegendSlots(RIGHT_SLUG),
         ["1"],
         "RIGHT's unrouted P2 authoring row is not presented as an existing route",
+      );
+      assert.equal(
+        await keyboardNode(page, RIGHT_SLUG).locator('.n-legend [data-slot="1"]').isVisible(),
+        true,
+      );
+      assert.equal(
+        await keyboardNode(page, RIGHT_SLUG).locator('.n-legend [data-slot="2"]').isVisible(),
+        false,
       );
 
       const sameKeyOwners = await page.locator(

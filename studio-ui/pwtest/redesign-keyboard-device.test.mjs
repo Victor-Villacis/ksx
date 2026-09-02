@@ -2,6 +2,7 @@
 
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -11,9 +12,11 @@ import { keyboardSourceMappingRoutes } from "../src/redesign-keyboard-device.ts"
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const entry = path.join(repoRoot, "studio-ui", "src", "redesign-keyboard-device.ts");
+const stylesheet = path.join(repoRoot, "studio-ui", "src", "studio.css");
 
 let browser;
 let keyboardDeviceBundle;
+let studioCss;
 
 before(async () => {
   const built = await build({
@@ -26,6 +29,7 @@ before(async () => {
     write: false,
   });
   keyboardDeviceBundle = built.outputFiles[0].text;
+  studioCss = await readFile(stylesheet, "utf8");
   browser = await chromium.launch();
 });
 
@@ -93,19 +97,25 @@ describe("redesign keyboard exact-source legend", { concurrency: false }, () => 
           </div>
         </section>
       `);
+      await page.addStyleTag({ content: studioCss });
       await page.addScriptTag({ content: keyboardDeviceBundle });
 
       const snapshots = await page.evaluate(() => {
         const surface = document.querySelector("#surface");
         const snapshot = () => ({
           legendHidden: surface.querySelector(".n-legend").hidden,
+          legendDisplay: getComputedStyle(surface.querySelector(".n-legend")).display,
           visibleSlots: Array.from(surface.querySelectorAll("[data-slot]"))
-            .filter((chip) => !chip.hidden)
+            .filter((chip) =>
+              !chip.hidden && getComputedStyle(chip).display !== "none" &&
+              chip.getClientRects().length > 0
+            )
             .map((chip) => Number(chip.dataset.slot)),
           hiddenSlotsAreAriaHidden: Array.from(surface.querySelectorAll("[data-slot]"))
             .filter((chip) => chip.hidden)
             .every((chip) => chip.getAttribute("aria-hidden") === "true"),
           moreHidden: surface.querySelector(".n-lgdmore").hidden,
+          moreDisplay: getComputedStyle(surface.querySelector(".n-lgdmore")).display,
           moreClass: surface.querySelector(".n-lgdmore").className,
           keyClass: surface.querySelector('[data-key="K"]').className,
         });
@@ -136,23 +146,32 @@ describe("redesign keyboard exact-source legend", { concurrency: false }, () => 
 
       assert.deepEqual(snapshots.none, {
         legendHidden: true,
+        legendDisplay: "none",
         visibleSlots: [],
         hiddenSlotsAreAriaHidden: true,
         moreHidden: true,
+        moreDisplay: "none",
         moreClass: "n-lgdmore none",
         keyClass: "n-key",
       });
       assert.deepEqual(snapshots.one.visibleSlots, [2]);
       assert.equal(snapshots.one.legendHidden, false);
+      assert.equal(snapshots.one.legendDisplay, "flex");
       assert.equal(snapshots.one.moreHidden, true);
+      assert.equal(snapshots.one.moreDisplay, "none");
       assert.deepEqual(snapshots.stacked.visibleSlots, [1, 2, 3, 4, 5]);
       assert.equal(snapshots.stacked.moreHidden, false);
+      assert.equal(snapshots.stacked.moreDisplay, "flex");
       assert.equal(snapshots.stacked.moreClass, "n-lgdmore");
       assert.match(snapshots.stacked.keyClass, /\bbstack\b/);
       assert.match(snapshots.stacked.keyClass, /\bbcount5\b/);
       assert.deepEqual(snapshots.changed.visibleSlots, [6]);
       assert.equal(snapshots.changed.moreHidden, true, "stale aggregate stack state is cleared");
+      assert.equal(snapshots.changed.moreDisplay, "none");
       assert.doesNotMatch(snapshots.changed.keyClass, /\bbstack\b|\bbcount5\b/);
+      assert.equal(await page.locator('[data-slot="1"]').isVisible(), false);
+      assert.equal(await page.locator('[data-slot="6"]').isVisible(), true);
+      assert.equal(await page.locator(".n-lgdmore").isVisible(), false);
     } finally {
       await page.close();
     }

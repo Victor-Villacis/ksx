@@ -14344,6 +14344,15 @@ button.n-keychip:hover {
   min-width: 0;
 }
 
+/* Author styles override the browser's default `[hidden]` rule. Physical
+   keyboard boards filter this server-wide blueprint per exact source, so the
+   legend and any peer-controller chips it marks hidden must win over the flex
+   declarations below. */
+.n-legend[hidden],
+.n-legend > [hidden] {
+  display: none;
+}
+
 .n-lgd {
   display: flex;
   align-items: center;

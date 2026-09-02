@@ -4686,9 +4686,20 @@ describe("the device workbench", () => {
       }
       await route.fulfill({ response, json: payload });
     });
-    try {
+    const submitTheme = async (theme) => {
+      // These theme choices are only the user-driven foreground refresh for
+      // this provider-truth scenario. Never start the next choice from the
+      // brief applyRedesign→finally gap while the prior menu is still open
+      // and every typed mutation control is correctly locked.
+      await page.waitForFunction(() => !document.querySelector("[data-rd-mutation-pending]"));
+      assert.equal(await page.locator(".rd-themed").getAttribute("open"), null);
       await page.click(".rd-themed > summary");
-      await page.click('.rd-thememenu form:has(input[value="matrix"]) button');
+      await page.click(`.rd-thememenu form:has(input[value="${theme}"]) button`);
+      await page.waitForFunction(() => !document.querySelector("[data-rd-mutation-pending]"));
+      assert.equal(await page.locator(".rd-themed").getAttribute("open"), null);
+    };
+    try {
+      await submitTheme("matrix");
       await page.waitForFunction(
         (id) =>
           document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
@@ -4707,7 +4718,6 @@ describe("the device workbench", () => {
         G915,
         "a nonauthoritative staging read preserves exact authoring context",
       );
-      await page.waitForFunction(() => !document.querySelector("[data-rd-mutation-pending]"));
       // A crowded workbench can attenuate an off-centre board below its
       // manual scale. F2 must calculate from that rendered scale and still
       // expose the recovery controls during a provider outage.
@@ -4794,8 +4804,7 @@ describe("the device workbench", () => {
       await page.keyboard.press("Escape");
 
       rosterMode = "unknown-scan";
-      await page.click(".rd-themed > summary");
-      await page.click('.rd-thememenu form:has(input[value="dark"]) button');
+      await submitTheme("dark");
       await page.waitForFunction(
         (id) =>
           document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset
@@ -4863,8 +4872,7 @@ describe("the device workbench", () => {
       }));
 
       rosterMode = "absent";
-      await page.click(".rd-themed > summary");
-      await page.click('.rd-thememenu form:has(input[value="light"]) button');
+      await submitTheme("light");
       await page.waitForFunction(
         (id) => !document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`),
         G915_SLUG,
@@ -4880,8 +4888,7 @@ describe("the device workbench", () => {
       );
 
       rosterMode = "full";
-      await page.click(".rd-themed > summary");
-      await page.click('.rd-thememenu form:has(input[value="system"]) button');
+      await submitTheme("system");
       await page.waitForFunction(
         (id) =>
           document.querySelector(`.forma-canvas-stage [data-instance-id="${id}"]`)?.dataset

@@ -501,6 +501,10 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
       true,
       "the consent owns focus before another client invalidates its draft authority",
     );
+    // Start over correctly removed this peer's controller and its inspector.
+    // Adopt restored the controller cards, but opening an inspector is a
+    // browser-local choice, so make the later peer action explicit again.
+    await openControllerInspector(authorityPeer);
     const peerSocdAgain = authorityPeer.locator('[data-rd-form="controller-socd"]');
     const peerSelectAgain = peerSocdAgain.locator('select[name="socd"]');
     const peerCurrentAgain = await peerSelectAgain.inputValue();

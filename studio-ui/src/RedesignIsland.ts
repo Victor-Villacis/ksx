@@ -5908,6 +5908,10 @@ function openDeviceBoardControls(
   if (isEncoder) syncEncoderEditingAccess("editing", requiredZoom);
   else syncKeyboardEditingAccess("editing", requiredZoom);
 
+  // Framing settles on the next paint. Remember who yielded focus for this
+  // transition so the deferred hand-off cannot overwrite a newer click, Tab,
+  // or a board-local repaint that already moved focus somewhere intentional.
+  const focusOwner = document.activeElement;
   window.requestAnimationFrame(() => {
     const viewport = root.querySelector<HTMLElement>(".forma-canvas-viewport");
     const zoom = canvasZoomFromViewport(viewport);
@@ -5930,7 +5934,13 @@ function openDeviceBoardControls(
         ) ?? null
         : null;
     const control = preferSurface ? surfaceControl ?? operationControl : operationControl;
-    (control ?? item).focus({ preventScroll: true });
+    const active = document.activeElement;
+    const focusOwnerWasReplaced = Boolean(
+      focusOwner && !focusOwner.isConnected && active === document.body,
+    );
+    if (active === focusOwner || focusOwnerWasReplaced) {
+      (control ?? item).focus({ preventScroll: true });
+    }
   });
   if (announce) rdAnnounce(`Opened controls for ${item.dataset.widgetName ?? "this input"}.`);
   return true;

@@ -465,7 +465,7 @@ describe("redesign migration hardening", { concurrency: false }, () => {
 
   test("a pre-write background payload cannot arrive after the action repaint", async () => {
     const page = await openBench();
-    const original = await page.locator('.rd-thememenu button[aria-current="true"]')
+    const original = await page.locator('.rd-thememenu [role="radio"][aria-checked="true"]')
       .evaluate((button) => button.closest("form")?.querySelector("input")?.value ?? "system");
     const target = original === "matrix" ? "midnight" : "matrix";
 

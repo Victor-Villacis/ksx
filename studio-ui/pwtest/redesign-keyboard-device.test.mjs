@@ -176,4 +176,108 @@ describe("redesign keyboard exact-source legend", { concurrency: false }, () => 
       await page.close();
     }
   });
+
+  test("each physical board is one roving Tab stop and keeps its logical key through tray repaint", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent(`
+        <style>
+          .n-kbrow, .n-kbtray-row { display: flex; gap: 8px; }
+          button { width: 40px; height: 40px; }
+        </style>
+        <section id="template" data-rd-keyboard-surface-template-body>
+          <div class="n-kbhead"><span class="n-kick">Template</span></div>
+          <div class="n-kbcase">
+            <div class="n-kbrow">
+              <button class="n-key" data-key="Q" tabindex="0"><span class="n-key-cap">Q</span><span class="n-key-short"></span></button>
+              <button class="n-key" data-key="W" tabindex="0"><span class="n-key-cap">W</span><span class="n-key-short"></span></button>
+              <button class="n-key" data-key="E" tabindex="0"><span class="n-key-cap">E</span><span class="n-key-short"></span></button>
+            </div>
+            <div class="n-kbrow">
+              <button class="n-key" data-key="A" tabindex="0"><span class="n-key-cap">A</span><span class="n-key-short"></span></button>
+              <button class="n-key" data-key="S" tabindex="0"><span class="n-key-cap">S</span><span class="n-key-short"></span></button>
+              <button class="n-key" data-key="D" tabindex="0"><span class="n-key-cap">D</span><span class="n-key-short"></span></button>
+            </div>
+          </div>
+          <div class="n-kbtray none" hidden>
+            <span class="n-kbtray-head"></span><div class="n-kbtray-row"></div>
+          </div>
+        </section>
+        <div id="host"></div>
+      `);
+      await page.addScriptTag({ content: keyboardDeviceBundle });
+      await page.evaluate(() => {
+        const template = document.querySelector("#template");
+        const surface = KSXKeyboardDevice.createKeyboardSurfaceInstance(template, {
+          sourceId: "usb:test:one",
+          instanceId: "keyboard-one",
+          sourceLabel: "Test keyboard",
+          mappingAvailable: true,
+        });
+        document.querySelector("#host").append(surface);
+      });
+
+      const surface = page.locator("[data-rd-keyboard-surface]");
+      const roving = () => surface.locator('button[data-key][tabindex="0"]');
+      assert.equal(await roving().count(), 1, "one key represents the board in sequential focus");
+      assert.equal(await roving().getAttribute("data-key"), "Q");
+
+      await surface.locator('[data-key="Q"]').focus();
+      await page.keyboard.press("ArrowRight");
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.getAttribute("data-key")),
+        "W",
+        "horizontal arrows move within the physical row",
+      );
+      await page.keyboard.press("ArrowDown");
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.getAttribute("data-key")),
+        "S",
+        "vertical arrows choose the nearest key in the next row",
+      );
+      await page.keyboard.press("End");
+      assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-key")), "D");
+      await page.keyboard.press("Control+Home");
+      assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-key")), "Q");
+      assert.equal(await roving().count(), 1, "navigation never creates a second Tab stop");
+
+      await page.evaluate(() => {
+        const surface = document.querySelector("[data-rd-keyboard-surface]");
+        KSXKeyboardDevice.syncKeyboardSourceMapping(surface, {
+          sourceLabel: "Test keyboard",
+          selectedSlot: 1,
+          routes: [{
+            slot: 1,
+            controls: [{ function: "guide", label: "Guide", keys: ["F13"] }],
+            macros: [],
+          }],
+        });
+      });
+      const firstTrayKey = surface.locator('.n-kbtray-row [data-key="F13"]');
+      await firstTrayKey.focus();
+      const oldTrayKey = await firstTrayKey.elementHandle();
+      await page.evaluate(() => {
+        const surface = document.querySelector("[data-rd-keyboard-surface]");
+        KSXKeyboardDevice.syncKeyboardSourceMapping(surface, {
+          sourceLabel: "Test keyboard",
+          selectedSlot: 1,
+          routes: [{
+            slot: 1,
+            controls: [{ function: "guide", label: "Guide", keys: ["F13"] }],
+            macros: [],
+          }],
+        });
+      });
+      assert.equal(await oldTrayKey.evaluate((key) => key.isConnected), false, "the tray really repainted");
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.getAttribute("data-key")),
+        "F13",
+        "focus returns to the equivalent dynamic key",
+      );
+      assert.equal(await roving().count(), 1);
+      assert.equal(await roving().getAttribute("data-key"), "F13");
+    } finally {
+      await page.close();
+    }
+  });
 });

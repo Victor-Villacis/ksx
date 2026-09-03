@@ -192,6 +192,16 @@ export interface RdOtherRowView {
   meta: string;
 }
 
+/** One exact staged input offered before Add Controller. This is a local
+ * presentation of the already-served device rows, not another device model. */
+export interface RdControllerAddSourceView {
+  selector: string;
+  revision: string;
+  label: string;
+  selected: boolean;
+  disabled: boolean;
+}
+
 /** The workbench picker's truth — `RedesignDeviceRows` on the wire. */
 export interface RdDeviceRows {
   keyboards: RdDeviceRowView[];
@@ -228,6 +238,39 @@ export interface RdPersonaRowView {
   usable: string;
 }
 
+interface RdRenderedPersonaRow extends RdPersonaRowView {
+  aria_disabled: "true" | "false";
+  action_label: "Add" | "Unavailable";
+  reason_id: string;
+}
+
+const CONTROLLER_SOURCE_REQUIRED =
+  "Add a keyboard or encoder to the canvas before adding a controller.";
+const CONTROLLER_SOURCE_UNAVAILABLE =
+  "Controller setup is temporarily unavailable because the background helper is not answering.";
+
+function renderedPersonaRows(
+  rows: RdPersonaRowView[],
+  sourceState: "ready" | "missing" | "unavailable",
+  sourceReason: string,
+): RdRenderedPersonaRow[] {
+  const sourceReady = sourceState === "ready";
+  const unavailableNote = sourceReason.trim() ||
+    (sourceState === "unavailable" ? CONTROLLER_SOURCE_UNAVAILABLE : CONTROLLER_SOURCE_REQUIRED);
+  return rows.map((row) => {
+    const usable = row.usable === "true" && sourceReady;
+    return {
+      ...row,
+      cls: usable || row.cls.split(/\s+/).includes("off") ? row.cls : `${row.cls} off`,
+      note: sourceReady ? row.note : unavailableNote,
+      usable: usable ? "true" : "false",
+      aria_disabled: usable ? "false" : "true",
+      action_label: usable ? "Add" : "Unavailable",
+      reason_id: `rd-persona-reason-${row.name}`,
+    };
+  });
+}
+
 /** The controller picker's truth — `RedesignControllers` on the wire. The
  *  CARDS are daemon truth (the staged rack), reconciled onto the canvas by
  *  redesign-controllers.ts; the roster and every ceiling are served. */
@@ -238,10 +281,16 @@ export interface RdControllers {
   source_preset?: string;
   add_source?: string;
   add_source_revision?: string;
+  /** Authoritative staged roster. Older producers omit it, in which case the
+   * island temporarily falls back to staged scan rows. */
+  add_sources?: RdControllerAddSourceView[];
+  add_source_state?: "ready" | "missing" | "unavailable";
+  add_source_reason?: string;
   cards: RdControllerCardView[];
   personas: RdPersonaRowView[];
   add_preset: string;
   add_layout: string;
+  add_layout_label?: string;
   add_note: string;
   counts_line: string;
   reachable: boolean;
@@ -437,20 +486,6 @@ export interface RdCaptureState {
   attention_retry_cls: string;
 }
 
-function composeLifecycleGuidance(operations?: RdOperationalState): string {
-  if (!operations) return "Save: Complete the current draft before saving.";
-  const rows: Array<[string, RdActionState, boolean]> = [
-    ["Save", operations.save, true],
-    ["Play", operations.play, operations.play.visible !== false || operations.session.running],
-    ["Apply", operations.apply, operations.apply.visible === true],
-    ["Stop", operations.stop, operations.stop.visible === true],
-  ];
-  const blocked = rows.find(([, action, visible]) =>
-    visible && action.allowed !== true && action.reason.trim().length > 0
-  );
-  return blocked ? `${blocked[0]}: ${blocked[1].reason.trim()}` : "";
-}
-
 // ── SERVED signals — copiers, never derivers ────────────────────────────────
 
 const [rdEnvCls, setRdEnvCls] = createSignal("n-environment unknown");
@@ -459,10 +494,15 @@ const [rdEnvCompactText, setRdEnvCompactText] = createSignal("UNKNOWN");
 const [rdEnvAccessibleText, setRdEnvAccessibleText] = createSignal("Environment unknown");
 const [rdStudioVersion, setRdStudioVersion] = createSignal("");
 const [rdThemeRows, setRdThemeRows] = createSignal<RdRenderedChoiceRow[]>([]);
+// Imperative form repair must retain fields that an older hydrated list graph
+// may omit from the DOM. Keep the exact served rows beside the render signal,
+// just as the device reconciler keeps its own atomic roster below.
+let rdThemeRowsSnapshot: RdRenderedChoiceRow[] = [];
 const [rdDevKb, setRdDevKb] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevEnc, setRdDevEnc] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevExp, setRdDevExp] = createSignal<RdDeviceRowView[]>([]);
 const [rdDevOther, setRdDevOther] = createSignal<RdOtherRowView[]>([]);
+const [rdCtrlAddSources, setRdCtrlAddSources] = createSignal<RdControllerAddSourceView[]>([]);
 // Imperative canvas reconciliation must see one atomic payload generation.
 // Forma list effects may settle between individual signal setters, so using
 // those getters here can briefly combine the new aggregate scan flag with a
@@ -497,7 +537,7 @@ const [rdDevExpHead, setRdDevExpHead] = createSignal("");
 const [rdDevExpFoldCls, setRdDevExpFoldCls] = createSignal("n-devfold none");
 const [rdDevOtherHead, setRdDevOtherHead] = createSignal("");
 const [rdDevOtherFoldCls, setRdDevOtherFoldCls] = createSignal("n-devfold none");
-const [rdCtrlPersonas, setRdCtrlPersonas] = createSignal<RdPersonaRowView[]>([]);
+const [rdCtrlPersonas, setRdCtrlPersonas] = createSignal<RdRenderedPersonaRow[]>([]);
 // The keyboard widget's served slots (the nocturne plate's own signal set).
 const [rdKbRow1, setRdKbRow1] = createSignal<RdKeyCellView[]>([]);
 const [rdKbRow2, setRdKbRow2] = createSignal<RdKeyCellView[]>([]);
@@ -536,18 +576,18 @@ const [rdDraftRevision, setRdDraftRevision] = createSignal("");
 const [rdDiscardConfirmCls, setRdDiscardConfirmCls] = createSignal("rd-danger-confirm none");
 
 const [rdSaveLabel, setRdSaveLabel] = createSignal("Save");
-const [rdSaveDisabled, setRdSaveDisabled] = createSignal(true);
+const [rdSaveDisabled, setRdSaveDisabled] = createSignal<"true" | "false">("true");
 const [rdSaveReason, setRdSaveReason] = createSignal("Complete the current draft before saving.");
 const [rdPlayLabel, setRdPlayLabel] = createSignal("Play");
-const [rdPlayDisabled, setRdPlayDisabled] = createSignal(true);
+const [rdPlayDisabled, setRdPlayDisabled] = createSignal<"true" | "false">("true");
 const [rdPlayReason, setRdPlayReason] = createSignal("Complete the current draft before Play.");
 const [rdPlayCls, setRdPlayCls] = createSignal("rd-runform");
 const [rdApplyLabel, setRdApplyLabel] = createSignal("Apply changes");
-const [rdApplyDisabled, setRdApplyDisabled] = createSignal(true);
+const [rdApplyDisabled, setRdApplyDisabled] = createSignal<"true" | "false">("true");
 const [rdApplyReason, setRdApplyReason] = createSignal("Nothing is running.");
 const [rdApplyCls, setRdApplyCls] = createSignal("rd-runform none");
 const [rdStopLabel, setRdStopLabel] = createSignal("Stop");
-const [rdStopDisabled, setRdStopDisabled] = createSignal(true);
+const [rdStopDisabled, setRdStopDisabled] = createSignal<"true" | "false">("true");
 const [rdStopReason, setRdStopReason] = createSignal("Nothing is running.");
 const [rdStopCls, setRdStopCls] = createSignal("rd-runform none");
 const [rdReplacePlayCls, setRdReplacePlayCls] = createSignal("rd-runform rd-replaceform none");
@@ -557,10 +597,6 @@ const [rdAdoptReason, setRdAdoptReason] = createSignal("There is no saved setup 
 const [rdDiscardLabel, setRdDiscardLabel] = createSignal("Start over");
 const [rdDiscardDisabled, setRdDiscardDisabled] = createSignal(true);
 const [rdDiscardReason, setRdDiscardReason] = createSignal("This draft is already empty.");
-const [rdActionGuidance, setRdActionGuidance] = createSignal(
-  "Save: Complete the current draft before saving.",
-);
-
 const [rdCaptureMode, setRdCaptureMode] = createSignal("none");
 const [rdCaptureAttentionCls, setRdCaptureAttentionCls] = createSignal("rd-attention none");
 const [rdCaptureAttentionTitle, setRdCaptureAttentionTitle] = createSignal("");
@@ -579,6 +615,7 @@ const [rdCtrlAddNote, setRdCtrlAddNote] = createSignal("");
 const [rdCtrlCountsLine, setRdCtrlCountsLine] = createSignal("");
 const [rdCtrlAddPreset, setRdCtrlAddPreset] = createSignal("");
 const [rdCtrlAddLayout, setRdCtrlAddLayout] = createSignal("");
+const [rdCtrlAddLayoutLabel, setRdCtrlAddLayoutLabel] = createSignal("");
 const [rdCtrlAddSource, setRdCtrlAddSource] = createSignal("");
 const [rdCtrlAddSourceRevision, setRdCtrlAddSourceRevision] = createSignal("");
 // The macro editor remains client-managed after adoption, but an open ?macro=
@@ -1214,6 +1251,41 @@ let rdStagingLine = "";
 const [rdFlashLine, setRdFlashLine] = createSignal("");
 const [rdFlashCls, setRdFlashCls] = createSignal("n-flash rd-flash none");
 
+function controllerAddSourceOptions(
+  rows: readonly RdDeviceRowView[],
+  selectedSource: string,
+  selectedRevision: string,
+  reachable: boolean,
+): RdControllerAddSourceView[] {
+  return rows
+    .filter((row) => row.aria_current === "true" && row.selector.trim().length > 0)
+    .map((row) => {
+      // Rolling-upgrade producers may lack the row revision while still
+      // providing the legacy exact scalar pair. Borrow it only for that
+      // visibly staged selector; a detached scalar must never invent a row.
+      const revision = row.staged_revision?.trim() ||
+        (row.selector === selectedSource ? selectedRevision : "");
+      const selected = row.selector === selectedSource ||
+        (selectedRevision.length > 0 && revision === selectedRevision);
+      const label = [
+        row.name.trim() || row.label.trim() || "Input source",
+        row.connection_label.trim() || row.selector,
+        row.connection_badge.trim(),
+      ].filter(Boolean).join(" · ");
+      return {
+        selector: row.selector,
+        revision,
+        label,
+        selected,
+        disabled: !reachable || revision.length === 0,
+      };
+    });
+}
+
+function controllerAddSourceKey(row: RdControllerAddSourceView): string {
+  return JSON.stringify([row.selector, row.label, row.selected, row.disabled]);
+}
+
 export function applyRedesign(v: RedesignPayload): void {
   if (reconcileRedesignEnvironment(v)) return;
   const deviceFocus = captureDeviceRowFocus();
@@ -1222,7 +1294,6 @@ export function applyRedesign(v: RedesignPayload): void {
   setRdStudioVersion(v.studio_version || "unknown");
   const operations = v.operations;
   rdOperations = operations ?? null;
-  setRdActionGuidance(composeLifecycleGuidance(operations));
   setRdOpDraftLabel(operations?.draft_label ?? "New draft");
   setRdOpDraftDetail(operations?.draft_detail ?? "Pick an input to begin.");
   setRdOpSavedLabel(operations?.saved_label ?? "Nothing saved yet");
@@ -1250,16 +1321,16 @@ export function applyRedesign(v: RedesignPayload): void {
 
   const save = operations?.save;
   setRdSaveLabel(save?.label || "Save");
-  setRdSaveDisabled(save?.allowed !== true);
+  setRdSaveDisabled(save?.allowed === true ? "false" : "true");
   setRdSaveReason(save?.reason ?? "Complete the current draft before saving.");
   const play = operations?.play;
   setRdPlayLabel(play?.label || "Play");
-  setRdPlayDisabled(play?.allowed !== true);
+  setRdPlayDisabled(play?.allowed === true ? "false" : "true");
   setRdPlayReason(play?.reason ?? "Complete the current draft before Play.");
   setRdPlayCls(play?.visible === false ? "rd-runform rd-playform none" : "rd-runform rd-playform");
   const apply = operations?.apply;
   setRdApplyLabel(apply?.label || "Apply changes");
-  setRdApplyDisabled(apply?.allowed !== true);
+  setRdApplyDisabled(apply?.allowed === true ? "false" : "true");
   setRdApplyReason(apply?.reason ?? "Nothing is running.");
   setRdApplyCls(
     apply?.visible === true || apply?.allowed === true
@@ -1268,7 +1339,7 @@ export function applyRedesign(v: RedesignPayload): void {
   );
   const stop = operations?.stop;
   setRdStopLabel(stop?.label || "Stop");
-  setRdStopDisabled(stop?.allowed !== true);
+  setRdStopDisabled(stop?.allowed === true ? "false" : "true");
   setRdStopReason(stop?.reason ?? "Nothing is running.");
   setRdStopCls(
     stop?.visible === true || operations?.session?.running === true
@@ -1337,7 +1408,14 @@ export function applyRedesign(v: RedesignPayload): void {
   }
   const themeRows = v.theme_rows ?? [];
   const renderedThemeRows = renderedChoiceRows(themeRows);
+  rdThemeRowsSnapshot = renderedThemeRows;
   setRdThemeRows(renderedThemeRows);
+  // A theme changed in another tab can replace the keyed choice row while
+  // this disclosure is open. Reassert the one-stop radio contract after the
+  // reactive list has reconciled, without making the refresh steal focus.
+  window.queueMicrotask(() => {
+    if (rdRoot) syncThemeRovingMenus(rdRoot);
+  });
   // The ONE verb whose effect lives outside this island's tree (the
   // nocturne lesson, carried over with the rows). Every other form's outcome
   // is repainted from this payload, but the theme is an attribute on <html>
@@ -1401,16 +1479,43 @@ export function applyRedesign(v: RedesignPayload): void {
   if (rdStagingReachable) {
     const currentSource = currentAuthoringSource();
     const servedSource = v.source?.trim() || v.controllers?.source?.trim() || "";
-    if (servedSource && canonicalStagedSelectors.has(servedSource)) {
-      mergeSourceIntoUrl(servedSource, false);
-    } else if (!canonicalStagedSelectors.has(currentSource)) {
-      const fallback = canonicalStagedSelectors.values().next().value ?? "";
-      if (fallback) mergeSourceIntoUrl(fallback, false);
-      else if (currentSource) {
-        const url = new URL(window.location.href);
-        url.searchParams.delete("source");
-        const query = url.searchParams.toString();
-        window.history.replaceState(null, "", `${url.pathname}${query ? `?${query}` : ""}`);
+    /* A same-page choice may be a newly staged source with no routes yet.
+       Older/canonical server projections can still report the previously
+       routed source for that refresh; do not let that stale default undo the
+       operator's exact-keyboard choice. A recovery source is different: when
+       authority explicitly keeps an unavailable routed source selected, keep
+       that exact blocker in context instead of silently focusing a healthy
+       peer. */
+    const servedSourceNeedsRecovery = Boolean(
+      servedSource && (
+        rdDeviceRowsSnapshot.some((row) =>
+          row.selector === servedSource && row.role === "offline-source"
+        ) ||
+        (v.controllers?.pads ?? []).some((pad) =>
+          (pad.sources ?? []).some((source) =>
+            source.source_id === servedSource && source.routed &&
+              source.mapping_available === false
+          )
+        )
+      ),
+    );
+    const localChoiceStillValid = Boolean(
+      currentSource && rdLocallyChosenSource === currentSource &&
+        canonicalStagedSelectors.has(currentSource) && !servedSourceNeedsRecovery,
+    );
+    if (!localChoiceStillValid) {
+      rdLocallyChosenSource = "";
+      if (servedSource && canonicalStagedSelectors.has(servedSource)) {
+        mergeSourceIntoUrl(servedSource, false, false);
+      } else if (!canonicalStagedSelectors.has(currentSource)) {
+        const fallback = canonicalStagedSelectors.values().next().value ?? "";
+        if (fallback) mergeSourceIntoUrl(fallback, false, false);
+        else if (currentSource) {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("source");
+          const query = url.searchParams.toString();
+          window.history.replaceState(null, "", `${url.pathname}${query ? `?${query}` : ""}`);
+        }
       }
     }
   }
@@ -1424,13 +1529,91 @@ export function applyRedesign(v: RedesignPayload): void {
   setRdDevOtherHead(d?.other_head ?? "");
   setRdDevOtherFoldCls(d?.other_fold_cls ?? "n-devfold none");
   const c = v.controllers;
-  setRdCtrlPersonas(c?.personas ?? []);
+  const servedAddSource = c?.add_source?.trim() ?? "";
+  const servedAddSourceRevision = c?.add_source_revision?.trim() ?? "";
+  const controllerSourceRows = c?.add_sources;
+  const authoritativeAddSources = Array.isArray(controllerSourceRows)
+    ? controllerSourceRows
+      .filter((row) => row.selector.trim().length > 0)
+      .map((row) => ({
+        selector: row.selector,
+        revision: row.revision?.trim() ?? "",
+        label: row.label?.trim() || row.selector,
+        selected: row.selected === true,
+        disabled: row.disabled === true,
+      }))
+    : null;
+  const servedAddSources = authoritativeAddSources ?? controllerAddSourceOptions(
+    stagedSources,
+    servedAddSource,
+    servedAddSourceRevision,
+    rdStagingReachable,
+  );
+  // A picker choice is local composition intent, not a change to the
+  // Inspector's authoring source. Preserve it across the two-second refresh
+  // while that exact staged row still exists; fall back to the server's
+  // selected source only after authoritative removal. Matching the opaque
+  // revision is the safe case-variant bridge without lossy selector folding.
+  const priorAddSource = rdCtrlAddSource();
+  const priorAddSourceRevision = rdCtrlAddSourceRevision();
+  const preferredAddSource = servedAddSources.find((row) =>
+    row.selector === priorAddSource ||
+    (priorAddSourceRevision.length > 0 && row.revision === priorAddSourceRevision)
+  ) ?? servedAddSources.find((row) => row.selected) ?? servedAddSources.find((row) =>
+    row.selector === servedAddSource ||
+    (servedAddSourceRevision.length > 0 && row.revision === servedAddSourceRevision)
+  ) ?? servedAddSources[0];
+  // The selected source must be backed by a visible exact roster row. A
+  // mixed-version payload can retain legacy scalars after its staged roster
+  // is empty or unreadable; enabling Add from those detached values would
+  // submit an invisible, unverifiable device.
+  const effectiveAddSource = preferredAddSource?.selector ?? "";
+  const effectiveAddSourceRevision = preferredAddSource?.revision?.trim() ?? "";
+  const nextAddSources = servedAddSources.map((row) => ({
+    ...row,
+    selected: row.selector === effectiveAddSource ||
+      (effectiveAddSourceRevision.length > 0 && row.revision === effectiveAddSourceRevision),
+    disabled: row.disabled || !rdStagingReachable || row.revision.length === 0,
+  }));
+  // An unavailable staging read is unknown, not an authoritative empty
+  // roster. Keep the last exact choices visible but disabled until authority
+  // returns instead of silently switching the controller-to-be.
+  setRdCtrlAddSources(
+    !rdStagingReachable && nextAddSources.length === 0 && rdCtrlAddSources().length > 0
+      ? rdCtrlAddSources().map((row) => ({ ...row, disabled: true }))
+      : nextAddSources,
+  );
+  const servedSourceState = c?.add_source_state;
+  const sourceBackedAndReady = Boolean(
+    preferredAddSource && !preferredAddSource.disabled &&
+      effectiveAddSource && effectiveAddSourceRevision,
+  );
+  const sourceState: "ready" | "missing" | "unavailable" =
+    !rdStagingReachable || servedSourceState === "unavailable"
+      ? "unavailable"
+      : sourceBackedAndReady
+        ? "ready"
+        : "missing";
+  setRdCtrlPersonas(renderedPersonaRows(
+    c?.personas ?? [],
+    sourceState,
+    c?.add_source_reason ?? "",
+  ));
   setRdCtrlAddNote(c?.add_note ?? "");
   setRdCtrlCountsLine(c?.counts_line ?? "");
   setRdCtrlAddPreset(c?.add_preset ?? "");
   setRdCtrlAddLayout(c?.add_layout ?? "");
-  setRdCtrlAddSource(c?.add_source ?? "");
-  setRdCtrlAddSourceRevision(c?.add_source_revision ?? "");
+  setRdCtrlAddLayoutLabel(c?.add_layout_label?.trim() || (c?.add_layout ?? ""));
+  setRdCtrlAddSource(
+    !rdStagingReachable && nextAddSources.length === 0 && priorAddSource
+      ? priorAddSource
+      : effectiveAddSource,
+  );
+  setRdCtrlAddSourceRevision(
+    !rdStagingReachable && nextAddSources.length === 0 && priorAddSourceRevision
+      ? priorAddSourceRevision
+      : effectiveAddSourceRevision,
+  );
   rdCtrlCards = c?.cards ?? [];
   rdCtrlParkedHeld = c?.parked_held ?? [];
   rdCtrlPads = c?.pads ?? [];
@@ -1859,7 +2042,7 @@ interface CanvasPrefs {
 
 let canvasPrefs: CanvasPrefs = { widgets: {} };
 let nCanvas: WidgetCanvas | null = null;
-let encoderAttentionObserver: MutationObserver | null = null;
+let interactionScaleObserver: MutationObserver | null = null;
 let rdRoot: HTMLElement | null = null;
 let encoderLabReturnCamera: { panX: number; panY: number; zoom: number } | null = null;
 let refreshEncoderProfileLab: ((devices: readonly EncoderProfileLabDevice[]) => void) | null = null;
@@ -2284,11 +2467,19 @@ const ENCODER_MIN_EFFECTIVE_EDIT_SCALE = 0.9;
 const ENCODER_EDIT_SCALE_SAFETY = 0.001;
 const KEYBOARD_MIN_EFFECTIVE_EDIT_SCALE = 0.9;
 const KEYBOARD_MIN_COARSE_EDIT_SCALE = 1.25;
+const CONTROLLER_MIN_EFFECTIVE_EDIT_SCALE = 0.9;
+const CONTROLLER_MIN_COARSE_EDIT_SCALE = 1.25;
 
 function keyboardMinEffectiveEditScale(): number {
   return window.matchMedia?.("(pointer: coarse)").matches
     ? KEYBOARD_MIN_COARSE_EDIT_SCALE
     : KEYBOARD_MIN_EFFECTIVE_EDIT_SCALE;
+}
+
+function controllerMinEffectiveEditScale(): number {
+  return window.matchMedia?.("(pointer: coarse)").matches
+    ? CONTROLLER_MIN_COARSE_EDIT_SCALE
+    : CONTROLLER_MIN_EFFECTIVE_EDIT_SCALE;
 }
 
 /** Camera zoom that preserves the encoder's 44px terminal targets after the
@@ -2501,11 +2692,72 @@ function syncKeyboardEditingAccess(
   }
 }
 
+/** Controller drawings are direct-manipulation surfaces only when their
+ * rendered controls are large enough to be honest targets. The outer canvas
+ * item remains selectable at every zoom, so overview navigation never turns
+ * into dozens of tiny keyboard or touch stops. */
+function syncControllerEditingAccess(
+  tier: string,
+  zoom = canvasZoomFromViewport(),
+): void {
+  const root = rdRoot;
+  if (!root) return;
+  for (const item of root.querySelectorAll<HTMLElement>(".rd-ctrl-node")) {
+    const manualScale = Number(item.dataset.canvasManualScale);
+    const attentionScale = Number(item.dataset.attentionScale);
+    const renderedItemScale = Number.isFinite(attentionScale) && attentionScale > 0
+      ? attentionScale
+      : Number.isFinite(manualScale) && manualScale > 0 ? manualScale : 1;
+    const interactive = tier === "editing" &&
+      zoom * renderedItemScale >= controllerMinEffectiveEditScale();
+    item.dataset.controllerArtInteractive = interactive ? "true" : "false";
+    const surfaces = item.querySelectorAll<HTMLElement>(
+      ".rd-ctrlcard-artwrap, .n-ds4-variants, .n-controller-variants",
+    );
+    const active = item.ownerDocument.activeElement;
+    const focusWasInSurface = !interactive && active instanceof Element &&
+      Array.from(surfaces).some((surface) => surface.contains(active));
+    for (const surface of surfaces) {
+      surface.inert = !interactive;
+      if (interactive) surface.removeAttribute("aria-hidden");
+      else surface.setAttribute("aria-hidden", "true");
+      // `inert` is the behavioral contract, but explicitly retire descendant
+      // tab stops as well. This keeps older accessibility bridges and SVG
+      // focus implementations from exposing controls that semantic zoom has
+      // removed from the accessibility tree.
+      for (const control of surface.querySelectorAll<HTMLElement | SVGElement>(
+        'button, [href], input, select, textarea, [tabindex]',
+      )) {
+        const saved = control.getAttribute("data-rd-semantic-tabindex");
+        if (!interactive) {
+          if (saved === null) {
+            control.setAttribute(
+              "data-rd-semantic-tabindex",
+              control.hasAttribute("tabindex")
+                ? `value:${control.getAttribute("tabindex") ?? ""}`
+                : "absent",
+            );
+          }
+          control.setAttribute("tabindex", "-1");
+        } else if (saved !== null) {
+          if (saved === "absent") control.removeAttribute("tabindex");
+          else control.setAttribute("tabindex", saved.slice("value:".length));
+          control.removeAttribute("data-rd-semantic-tabindex");
+        }
+      }
+    }
+    if (focusWasInSurface) {
+      window.requestAnimationFrame(() => item.focus({ preventScroll: true }));
+    }
+  }
+}
+
 function applyZoomTier(tier: string, zoom = canvasZoomFromViewport()): void {
   const el = rdRoot?.querySelector<HTMLElement>(".rd-tier");
   if (el) el.textContent = TIER_COPY[tier] ?? tier;
   syncEncoderEditingAccess(tier, zoom);
   syncKeyboardEditingAccess(tier, zoom);
+  syncControllerEditingAccess(tier, zoom);
 }
 
 // ── Chrome state the engine reports back ────────────────────────────────────
@@ -2533,11 +2785,16 @@ function syncMapCount(): void {
   const root = rdRoot;
   if (!root) return;
   const el = root.querySelector<HTMLElement>(".rd-map-count");
-  if (!el) return;
   // Stage-scoped on purpose: the minimap's own markers carry
   // data-instance-id too and would double the count.
   const count = root.querySelectorAll(".forma-canvas-stage > [data-instance-id]").length;
-  el.textContent = count === 1 ? "1 widget" : `${count} widgets`;
+  if (el) el.textContent = count === 1 ? "1 widget" : `${count} widgets`;
+  const empty = root.querySelector<HTMLElement>(".rd-canvas-empty");
+  if (empty) {
+    const show = count === 0;
+    empty.hidden = !show;
+    empty.toggleAttribute("inert", !show);
+  }
 }
 
 // ── The zoom menu, the command palette, and the shortcut sheet ──────────────
@@ -2622,18 +2879,62 @@ function closeThemeMenu(restoreFocus = false): boolean {
 
 const themeDisclosureRoots = new WeakSet<HTMLElement>();
 
+/** Keep the custom Theme radios to one keyboard entry point. The generated
+ * no-script forms deliberately remain independently submit-able, but once
+ * the island owns the disclosure it must expose native-radio-style roving
+ * focus. This imperative guard also covers a hydrated list whose dynamic
+ * `tabindex` attribute was omitted by an older generated asset. */
+function syncThemeRoving(menu: HTMLElement): void {
+  const rows = rdThemeRowsSnapshot;
+  const forms = Array.from(
+    menu.querySelectorAll<HTMLFormElement>('form[data-rd-form="theme"]'),
+  );
+  forms.forEach((form, index) => {
+    const row = rows[index];
+    if (!row) return;
+    const input = form.querySelector<HTMLInputElement>('input[name="theme"]');
+    const radio = form.querySelector<HTMLButtonElement>('[role="radio"]');
+    // Forma's hydrated list owns text/class correctly, but an older IR graph
+    // can omit dynamic form-value and tabindex attributes on a later poll.
+    // Restamp both from the same served row so a long-open Studio never posts
+    // an empty theme or turns the group into four Tab stops.
+    if (input) {
+      input.value = row.name;
+      input.setAttribute("value", row.name);
+    }
+    radio?.setAttribute("aria-checked", row.chosen);
+  });
+  const radios = forms
+    .map((form) => form.querySelector<HTMLButtonElement>('[role="radio"]'))
+    .filter((radio): radio is HTMLButtonElement =>
+      Boolean(radio && !radio.disabled && !radio.closest("[hidden]"))
+    );
+  if (radios.length === 0) return;
+  const current = radios.find((radio) => radio.getAttribute("aria-checked") === "true") ??
+    radios[0];
+  radios.forEach((radio) => {
+    radio.tabIndex = radio === current ? 0 : -1;
+  });
+}
+
+function syncThemeRovingMenus(root: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>("[data-rd-theme-menu]").forEach(syncThemeRoving);
+}
+
 /** Theme has one stable top-level home at every width. Native details keeps
  * the preference available before the client wire loads; the island only
  * coordinates dismissal with peer overlays. */
 function wireThemeDisclosures(root: HTMLElement): void {
   if (themeDisclosureRoots.has(root)) return;
   themeDisclosureRoots.add(root);
+  syncThemeRovingMenus(root);
   root.addEventListener(
     "toggle",
     (event) => {
       const opened = event.target;
       if (!(opened instanceof HTMLDetailsElement) ||
           !opened.matches("[data-rd-theme-menu]") || !opened.open) return;
+      syncThemeRoving(opened);
       root.querySelectorAll<HTMLDetailsElement>("[data-rd-theme-menu][open]").forEach(
         (peer) => {
           if (peer !== opened) peer.open = false;
@@ -2653,6 +2954,7 @@ function setSheet(open: boolean): void {
     if (devModalIsOpen()) setDevModal(false);
     if (ctrlModalIsOpen()) setCtrlModal(false);
     if (paletteOpen()) setPalette(false);
+    setRedesignChildModal(true);
     closeThemeMenu(true);
     setZoomMenu(false);
     sheetReturnFocus = activeControl();
@@ -2666,6 +2968,7 @@ function setSheet(open: boolean): void {
     const target = sheetReturnFocus;
     sheetReturnFocus = null;
     restoreOverlayFocus(target);
+    setRedesignChildModal(false);
   }
 }
 
@@ -2716,6 +3019,7 @@ function setPalette(open: boolean): void {
   const overlay = root?.querySelector<HTMLElement>(".rd-palette");
   if (!root || !overlay) return;
   if (overlay.hidden === !open) return;
+  const input = overlay.querySelector<HTMLInputElement>(".rd-palette-input");
   if (open) {
     // Only one modal surface owns focus at a time. In particular, Ctrl/Cmd+K
     // replaces an open device picker or shortcut sheet instead of focusing a
@@ -2723,18 +3027,21 @@ function setPalette(open: boolean): void {
     if (devModalIsOpen()) setDevModal(false);
     if (ctrlModalIsOpen()) setCtrlModal(false);
     if (sheetOpen()) setSheet(false);
+    setRedesignChildModal(true);
     closeThemeMenu(true);
     setZoomMenu(false);
     paletteReturnFocus = activeControl();
   }
   overlay.hidden = !open;
+  input?.setAttribute("aria-expanded", String(open));
   if (!open) {
+    input?.removeAttribute("aria-activedescendant");
     const target = paletteReturnFocus;
     paletteReturnFocus = null;
     restoreOverlayFocus(target);
+    setRedesignChildModal(false);
     return;
   }
-  const input = overlay.querySelector<HTMLInputElement>(".rd-palette-input");
   if (input) {
     input.value = "";
     input.focus();
@@ -2748,9 +3055,19 @@ function trapDialogTab(event: KeyboardEvent): void {
   const card = event.currentTarget as HTMLElement;
   const controls = Array.from(
     card.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+        'textarea:not([disabled]), summary, [href], [tabindex]:not([tabindex="-1"])',
     ),
-  ).filter((control) => !control.hidden && !control.closest("[hidden]"));
+  ).filter((control) => {
+    const style = window.getComputedStyle(control);
+    const closedDisclosure = control.closest<HTMLDetailsElement>("details:not([open])");
+    const hiddenByDisclosure = closedDisclosure !== null &&
+      control !== closedDisclosure.querySelector(":scope > summary");
+    return !control.hidden && !control.closest("[hidden], [inert]") &&
+      !hiddenByDisclosure &&
+      style.display !== "none" && style.visibility !== "hidden" &&
+      control.getClientRects().length > 0;
+  });
   if (controls.length === 0) return;
   const first = controls[0];
   const last = controls[controls.length - 1];
@@ -2819,10 +3136,14 @@ function renderPalette(query: string): void {
   if (paletteIndex >= rows.length) paletteIndex = Math.max(0, rows.length - 1);
   const renderedRows = rows.map((row, index) => {
     const li = document.createElement("li");
+    li.setAttribute("role", "none");
     const button = document.createElement("button");
     button.type = "button";
     button.className = "rd-palette-row";
-    if (index === paletteIndex) button.setAttribute("aria-current", "true");
+    button.id = `rd-palette-option-${index}`;
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", String(index === paletteIndex));
+    button.tabIndex = -1;
     const name = document.createElement("span");
     name.className = "rd-palette-name";
     name.textContent = row.name;
@@ -2846,12 +3167,25 @@ function renderPalette(query: string): void {
   if (renderedRows.length === 0) {
     const empty = document.createElement("li");
     empty.className = "rd-palette-empty";
-    empty.setAttribute("role", "status");
+    empty.setAttribute("role", "option");
+    empty.setAttribute("aria-disabled", "true");
     empty.textContent = `Nothing matches “${query.trim()}”`;
     renderedRows.push(empty);
   }
   list.replaceChildren(...renderedRows);
   list.dataset.rowCount = String(rows.length);
+  const input = root.querySelector<HTMLInputElement>(".rd-palette-input");
+  if (rows.length > 0) {
+    const activeId = `rd-palette-option-${paletteIndex}`;
+    input?.setAttribute("aria-activedescendant", activeId);
+    // DOM focus stays on the combobox, so the browser will not reveal an
+    // off-screen active descendant for us. Keep the announced option inside
+    // the capped result viewport as keyboard selection moves.
+    list.querySelector<HTMLElement>(`#${activeId}`)
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  } else {
+    input?.removeAttribute("aria-activedescendant");
+  }
 }
 
 function paletteKeydown(event: KeyboardEvent): void {
@@ -2880,6 +3214,54 @@ function paletteKeydown(event: KeyboardEvent): void {
 
 function inspectorEl(): HTMLElement | null {
   return rdRoot?.querySelector<HTMLElement>(".rd-inspector") ?? null;
+}
+
+const INSPECTOR_MODAL_MEDIA = "(max-width: 760px)";
+let inspectorReturnFocus: HTMLElement | null = null;
+let suspendedInspectorFocus: HTMLElement | null = null;
+let suppressNextInspectorInitialFocus = false;
+let redesignChildModalOpen = false;
+
+function inspectorUsesModalPresentation(): boolean {
+  return window.matchMedia(INSPECTOR_MODAL_MEDIA).matches;
+}
+
+function syncInspectorAccessibility(
+  panel: HTMLElement,
+  open: boolean,
+  wasOpen: boolean,
+): void {
+  const main = rdRoot?.querySelector<HTMLElement>("main.n-main");
+  const wasModal = panel.getAttribute("aria-modal") === "true";
+  const modal = open && inspectorUsesModalPresentation();
+  panel.toggleAttribute("role", modal);
+  if (modal) panel.setAttribute("role", "dialog");
+  if (modal) panel.setAttribute("aria-modal", "true");
+  else panel.removeAttribute("aria-modal");
+  main?.toggleAttribute("inert", modal);
+
+  if (modal && (!wasOpen || !wasModal)) {
+    if (suppressNextInspectorInitialFocus) {
+      suppressNextInspectorInitialFocus = false;
+      return;
+    }
+    // Pointer activation finishes its native focus step after the delegated
+    // canvas click handler returns. If main becomes inert synchronously and
+    // we focus X here, that trailing step tries to focus the initiator inside
+    // inert main and Chromium drops focus to BODY. Hand the modal focus over
+    // on the next frame, once the originating activation has fully settled.
+    window.requestAnimationFrame(() => {
+      if (panel.hidden || panel.getAttribute("aria-modal") !== "true") return;
+      panel.querySelector<HTMLButtonElement>('[data-nx="rd-insp-close"]')
+        ?.focus({ preventScroll: true });
+    });
+  } else if (!open && wasModal) {
+    const target = inspectorReturnFocus;
+    inspectorReturnFocus = null;
+    restoreOverlayFocus(target);
+  } else if (!modal && wasModal) {
+    inspectorReturnFocus = null;
+  }
 }
 
 function inspectorInset(): number {
@@ -2980,12 +3362,19 @@ function currentAuthoringSource(): string {
   return new URLSearchParams(window.location.search).get("source")?.trim() ?? "";
 }
 
+let rdLocallyChosenSource = "";
+
 /** Select one keyboard as the inspector/listen context. This does not enable,
  * disable, or reroute any peer: all staged keyboard graphs remain live. */
-function mergeSourceIntoUrl(selector: string, resetMacro = true): boolean {
+function mergeSourceIntoUrl(
+  selector: string,
+  resetMacro = true,
+  recordsLocalChoice = true,
+): boolean {
   const source = selector.trim();
   if (!source) return false;
   const url = new URL(window.location.href);
+  if (recordsLocalChoice) rdLocallyChosenSource = source;
   if (url.searchParams.get("source") === source) return false;
   url.searchParams.set("source", source);
   if (resetMacro) url.searchParams.delete("macro");
@@ -3394,6 +3783,12 @@ function setInspector(open: boolean): void {
   const canvas = nCanvas;
   if (!panel || !canvas) return;
   const wasOpen = !panel.hidden;
+  if (open && !wasOpen) {
+    const active = activeControl();
+    inspectorReturnFocus = active && !panel.contains(active)
+      ? active
+      : canvas.activeItem();
+  }
   panel.hidden = !open;
   rdRoot?.classList.toggle("is-inspector-open", open);
   const inset = inspectorInset();
@@ -3404,7 +3799,48 @@ function setInspector(open: boolean): void {
     // often zero — and only when the panel is NEWLY open.
     if (!wasOpen && inset > 0) canvas.keepActiveClear();
   }
+  syncInspectorAccessibility(panel, open, wasOpen);
   syncChips();
+}
+
+/** A consequence dialog launched from the phone Inspector temporarily owns
+ * the modal layer. Suspend and later restore the Inspector so the page never
+ * exposes two aria-modal surfaces or traps the child inside an inert main. */
+export function setRedesignChildModal(open: boolean): void {
+  const root = rdRoot;
+  const panel = inspectorEl();
+  if (!root || !panel) return;
+  redesignChildModalOpen = open;
+  if (open) {
+    if (!panel.hidden && panel.getAttribute("aria-modal") === "true") {
+      const active = document.activeElement;
+      suspendedInspectorFocus = active instanceof HTMLElement && panel.contains(active)
+        ? active
+        : panel.querySelector<HTMLButtonElement>('[data-nx="rd-insp-close"]');
+      root.dataset.rdInspectorSuspended = "true";
+      setInspector(false);
+    }
+    return;
+  }
+  if (root.dataset.rdInspectorSuspended !== "true") return;
+  delete root.dataset.rdInspectorSuspended;
+  if (
+    !devModalIsOpen() && !ctrlModalIsOpen() && !paletteOpen() && !sheetOpen()
+  ) {
+    const target = suspendedInspectorFocus;
+    suspendedInspectorFocus = null;
+    suppressNextInspectorInitialFocus = inspectorUsesModalPresentation();
+    setInspector(true);
+    window.requestAnimationFrame(() => {
+      if (panel.hidden) return;
+      const restored = target?.isConnected === true && panel.contains(target)
+        ? target
+        : panel.querySelector<HTMLButtonElement>('[data-nx="rd-insp-close"]');
+      restored?.focus({ preventScroll: true });
+    });
+  } else {
+    suspendedInspectorFocus = null;
+  }
 }
 
 function syncInspectorToSelection(items: HTMLElement[]): void {
@@ -4274,6 +4710,7 @@ function createDeviceCapturePanel(row: RdDeviceRowView): HTMLDetailsElement {
     const button = document.createElement("button");
     button.type = "submit";
     button.className = "rd-panel-action primary";
+    button.dataset.widgetRevealKey = "capture-primary";
     button.disabled = !identityAuthoritative;
     if (!identityAuthoritative) {
       button.title = "Device identity is temporarily unavailable. Check again before preparing it.";
@@ -4301,6 +4738,7 @@ function createDeviceCapturePanel(row: RdDeviceRowView): HTMLDetailsElement {
     const button = document.createElement("button");
     button.type = "submit";
     button.className = "rd-panel-action";
+    button.dataset.widgetRevealKey = "capture-primary";
     button.disabled = !identityAuthoritative;
     if (!identityAuthoritative) {
       button.title = "Device identity is temporarily unavailable. Check again before releasing it.";
@@ -5303,6 +5741,7 @@ function syncKeyboardDevicePresentation(): void {
   const zoom = canvasZoomFromViewport(viewport);
   syncEncoderEditingAccess(tier, zoom);
   syncKeyboardEditingAccess(tier, zoom);
+  syncControllerEditingAccess(tier, zoom);
   syncMappingCords();
 }
 
@@ -5522,10 +5961,12 @@ function syncAddPanelChrome(): void {
   const devOpen = devModalIsOpen();
   const ctrlOpen = ctrlModalIsOpen();
   root.classList.toggle("is-add-panel-open", devOpen || ctrlOpen);
-  root.querySelector<HTMLElement>('[data-nx="rd-devs-open"]')
-    ?.setAttribute("aria-expanded", String(devOpen));
-  root.querySelector<HTMLElement>('[data-nx="rd-ctrls-open"]')
-    ?.setAttribute("aria-expanded", String(ctrlOpen));
+  root.querySelectorAll<HTMLElement>(
+    '[data-nx="rd-devs-open"], [data-nx="rd-empty-devs-open"]',
+  ).forEach((trigger) => trigger.setAttribute("aria-expanded", String(devOpen)));
+  root.querySelectorAll<HTMLElement>(
+    '[data-nx="rd-ctrls-open"], [data-nx="rd-empty-ctrls-open"]',
+  ).forEach((trigger) => trigger.setAttribute("aria-expanded", String(ctrlOpen)));
 }
 
 function beginAddPanelSession(): void {
@@ -5601,6 +6042,44 @@ function ctrlModalEl(): HTMLElement | null {
 function ctrlModalIsOpen(): boolean {
   const el = ctrlModalEl();
   return Boolean(el && !el.hidden);
+}
+
+/** Keep every persona form on the same exact source authority. Signals own
+ * refresh reconciliation; these direct property writes make a source change
+ * and an immediately-following submit one atomic browser gesture. */
+function syncControllerAddFormSource(selector: string, revision: string): void {
+  const root = rdRoot;
+  if (!root) return;
+  root.querySelectorAll<HTMLFormElement>('form[data-rd-form="controller-add"]')
+    .forEach((form) => {
+      form.dataset.source = selector;
+      form.dataset.expectedSourceRevision = revision;
+      const source = form.elements.namedItem("source");
+      const sourceRevision = form.elements.namedItem("expected_source_revision");
+      if (source instanceof HTMLInputElement) source.value = selector;
+      if (sourceRevision instanceof HTMLInputElement) sourceRevision.value = revision;
+    });
+}
+
+function chooseControllerAddSource(select: HTMLSelectElement): void {
+  const root = rdRoot;
+  if (!root || root.dataset.rdMutationPending === "true") {
+    select.value = rdCtrlAddSource();
+    return;
+  }
+  const choice = rdCtrlAddSources().find((row) => row.selector === select.value);
+  if (!choice || choice.disabled || !choice.revision) {
+    select.value = rdCtrlAddSource();
+    rdAnnounce("That input source is not ready for a guarded controller add.");
+    return;
+  }
+  setRdCtrlAddSource(choice.selector);
+  setRdCtrlAddSourceRevision(choice.revision);
+  setRdCtrlAddSources(
+    rdCtrlAddSources().map((row) => ({ ...row, selected: row.selector === choice.selector })),
+  );
+  syncControllerAddFormSource(choice.selector, choice.revision);
+  rdAnnounce(`${choice.label} selected for the next controller.`);
 }
 
 let ctrlModalReturnFocus: HTMLElement | null = null;
@@ -5737,6 +6216,7 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
         const zoom = canvasZoomFromViewport(viewport);
         syncEncoderEditingAccess(tier, zoom);
         syncKeyboardEditingAccess(tier, zoom);
+        syncControllerEditingAccess(tier, zoom);
         scheduleSharedPolicyEditorPosition();
         scheduleChips();
       },
@@ -5757,7 +6237,10 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
         // Semantic overview intentionally hides editing chrome. F2 is an
         // explicit request to enter it, so cross the editing threshold before
         // focusing rather than claiming success on a display:none control.
-        if (control.getClientRects().length === 0) {
+        if (
+          control.getClientRects().length === 0 ||
+          viewport.dataset.canvasZoomTier !== "editing"
+        ) {
           nCanvas?.setZoomTo(0.94, "before opening widget controls");
         }
         control.focus({ preventScroll: true });
@@ -5774,21 +6257,24 @@ export function initRedesignCanvas(root: HTMLElement, attempt = 0): void {
       },
     },
   );
-  encoderAttentionObserver?.disconnect();
-  encoderAttentionObserver = new MutationObserver((records) => {
+  interactionScaleObserver?.disconnect();
+  interactionScaleObserver = new MutationObserver((records) => {
     if (!records.some((record) =>
       record.target instanceof HTMLElement &&
       (
         record.target.classList.contains("rd-encoder-device-node") ||
-        record.target.classList.contains("rd-keyboard-device-node")
+        record.target.classList.contains("rd-keyboard-device-node") ||
+        record.target.classList.contains("rd-offline-device-node") ||
+        record.target.classList.contains("rd-ctrl-node")
       )
     )) return;
     const tier = viewport.dataset.canvasZoomTier ?? "editing";
     const zoom = canvasZoomFromViewport(viewport);
     syncEncoderEditingAccess(tier, zoom);
     syncKeyboardEditingAccess(tier, zoom);
+    syncControllerEditingAccess(tier, zoom);
   });
-  encoderAttentionObserver.observe(stage, {
+  interactionScaleObserver.observe(stage, {
     subtree: true,
     attributes: true,
     attributeFilter: ["data-attention-scale", "data-canvas-manual-scale"],
@@ -6407,6 +6893,11 @@ export function redesignWire(root: HTMLElement): void {
     const select = ev.target;
     if (
       select instanceof HTMLSelectElement &&
+      select.dataset.nx === "rd-controller-add-source"
+    ) {
+      chooseControllerAddSource(select);
+    } else if (
+      select instanceof HTMLSelectElement &&
       select.dataset.nx === "rd-mapping-paths" &&
       mappingPathModeIsValid(select.value)
     ) {
@@ -6849,7 +7340,7 @@ export function redesignWire(root: HTMLElement): void {
     } else if (hit === "rd-encoder-profiles") {
       toggleEncoderProfileLab();
       return;
-    } else if (hit === "rd-devs-open") {
+    } else if (hit === "rd-devs-open" || hit === "rd-empty-devs-open") {
       setDevModal(!devModalIsOpen());
       return;
     } else if (hit === "rd-rescan") {
@@ -6869,7 +7360,7 @@ export function redesignWire(root: HTMLElement): void {
         .selector;
       if (selector) void toggleBenchDevice(selector);
       return;
-    } else if (hit === "rd-ctrls-open") {
+    } else if (hit === "rd-ctrls-open" || hit === "rd-empty-ctrls-open") {
       setCtrlModal(!ctrlModalIsOpen());
       return;
     } else if (hit === "rd-ctrls-close") {
@@ -6909,9 +7400,14 @@ export function redesignWire(root: HTMLElement): void {
       // The inspector is Focus mode's editing surface. Closing it must leave
       // that mode too, or the rest of the canvas remains inert behind a panel
       // that is no longer visible.
+      const restoreNonmodal = inspectorEl()?.getAttribute("aria-modal") !== "true";
+      const returnTarget = restoreNonmodal ? inspectorReturnFocus : null;
       nCanvas?.exitFocusMode();
       setInspector(false);
-      focusCanvasContext();
+      if (restoreNonmodal) {
+        inspectorReturnFocus = null;
+        restoreOverlayFocus(returnTarget);
+      }
     } else if (hit === "rd-w-smaller" || hit === "rd-w-bigger" || hit === "rd-w-reset") {
       const widget = nCanvas?.activeItem();
       if (widget && nCanvas) {
@@ -6942,6 +7438,36 @@ export function redesignWire(root: HTMLElement): void {
     ?.addEventListener("keydown", trapDialogTab);
   root.querySelector<HTMLElement>(".rd-sheet-card")
     ?.addEventListener("keydown", trapDialogTab);
+  root.querySelector<HTMLElement>(".rd-inspector")
+    ?.addEventListener("keydown", trapDialogTab);
+
+  root.querySelector<HTMLElement>('.rd-thememenu[role="radiogroup"]')
+    ?.addEventListener("keydown", (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLButtonElement>('[role="radio"]')
+        : null;
+      if (!target) return;
+      const radios = Array.from(
+        target.closest<HTMLElement>('[role="radiogroup"]')
+          ?.querySelectorAll<HTMLButtonElement>('[role="radio"]') ?? [],
+      ).filter((radio) => !radio.disabled && !radio.closest("[hidden]"));
+      if (radios.length === 0) return;
+      const current = Math.max(0, radios.indexOf(target));
+      let next: number | null = null;
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        next = (current + 1) % radios.length;
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        next = (current - 1 + radios.length) % radios.length;
+      } else if (event.key === "Home") {
+        next = 0;
+      } else if (event.key === "End") {
+        next = radios.length - 1;
+      }
+      if (next === null) return;
+      event.preventDefault();
+      radios[next]?.focus({ preventScroll: true });
+      radios[next]?.click();
+    });
 
   const zoomTrigger = zoomMenuTrigger();
   const zoomMenu = root.querySelector<HTMLElement>(".rd-menu");
@@ -6987,6 +7513,19 @@ export function redesignWire(root: HTMLElement): void {
   });
   window.addEventListener("resize", () => {
     nCanvas?.setSafeInsetRight(inspectorInset(), true);
+    const inspector = inspectorEl();
+    if (inspector && !inspector.hidden) {
+      if (redesignChildModalOpen && inspectorUsesModalPresentation()) {
+        const active = document.activeElement;
+        suspendedInspectorFocus = active instanceof HTMLElement && inspector.contains(active)
+          ? active
+          : inspector.querySelector<HTMLButtonElement>('[data-nx="rd-insp-close"]');
+        root.dataset.rdInspectorSuspended = "true";
+        setInspector(false);
+      } else {
+        syncInspectorAccessibility(inspector, true, true);
+      }
+    }
     scheduleChips();
     scheduleSharedPolicyEditorPosition();
   });
@@ -7000,12 +7539,19 @@ export function redesignWire(root: HTMLElement): void {
     // choices is focused. Canvas single-key shortcuts and the global palette
     // must not move or cover the surface underneath it.
     if (policyOwnsFocus && ev.key !== "Escape") return;
-    // Ctrl/Cmd+K / F open the palette from ANYWHERE, a text field included —
-    // the one binding checked before the typing guard. NOT while a mapping
-    // gesture holds the page: a key in hand or an armed learn owns the
-    // keyboard (nocturne's Ctrl+K-only-when-idle rule).
-    if ((ev.metaKey || ev.ctrlKey) && (ev.key === "k" || ev.key === "f")) {
+    // Ctrl/Cmd+K opens the palette from anywhere, including a text field.
+    // Preserve Ctrl/Cmd+F for the browser's universally understood Find
+    // command; a product search must not silently replace platform behavior.
+    // NOT while a mapping gesture holds the page: a key in hand or an armed
+    // learn owns the keyboard (nocturne's Ctrl+K-only-when-idle rule).
+    if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "k") {
       if (root.querySelector<HTMLElement>("[data-rd-apply-dialog]:not([hidden])")) {
+        ev.preventDefault();
+        return;
+      }
+      // The macro editor may hold unsaved steps and owns its own focus trap.
+      // A global palette cannot safely replace or stack over that modal.
+      if (rdMacOpen()) {
         ev.preventDefault();
         return;
       }
@@ -7078,6 +7624,13 @@ export function redesignWire(root: HTMLElement): void {
       else if (sheetOpen()) setSheet(false);
       else if (paletteOpen()) setPalette(false);
       else if (zoomMenuOpen()) setZoomMenu(false);
+      else if (
+        inspectorEl()?.hidden === false &&
+        inspectorEl()?.getAttribute("aria-modal") === "true"
+      ) {
+        nCanvas?.exitFocusMode();
+        setInspector(false);
+      }
       // Escape in an Inspector field belongs to that field; it must never
       // pop camera history or clear the selection being edited.
       else if (typingIntoSomething(ev)) return;
@@ -7172,7 +7725,7 @@ function redesignThemeDisclosure() {
     ),
     h(
       "div",
-      { class: "rd-thememenu" },
+      { class: "rd-thememenu", role: "radiogroup", "aria-label": "Studio theme" },
       h("div", { class: "n-kick-row" }, h("span", { class: "n-kick" }, "How the Studio looks")),
       h(
         "p",
@@ -7197,9 +7750,11 @@ function redesignThemeDisclosure() {
               {
                 type: "submit",
                 class: r.cls,
-                "aria-current": r.chosen,
+                role: "radio",
+                "aria-checked": r.chosen,
+                tabindex: r.tabindex,
               },
-              h("span", { class: "n-radio-dot" }),
+              h("span", { class: "n-radio-dot", "aria-hidden": "true" }),
               h(
                 "span",
                 { class: "n-radio-txt" },
@@ -7667,7 +8222,7 @@ export function RedesignIsland() {
           // Product identity. The route remains /redesign during construction,
           // but the surface is the workbench people will actually use — it
           // should not make them reason about an internal migration name.
-          h("span", { class: "rd-brand" }, "ksx Studio"),
+          h("h1", { class: "rd-brand" }, "ksx Studio"),
           h("span", { class: "rd-crumb" }, "Workbench"),
           // Which machine answers this lane — the fixture badge, so the
           // redesign workbench can never be mistaken for the cabinet.
@@ -7675,6 +8230,7 @@ export function RedesignIsland() {
             "span",
             {
               class: () => rdEnvCls(),
+              role: "note",
               title: () => rdEnvAccessibleText(),
               "aria-label": () => rdEnvAccessibleText(),
             },
@@ -7707,9 +8263,11 @@ export function RedesignIsland() {
               "data-nx": "rd-devs-open",
               "aria-controls": "rd-device-picker",
               "aria-expanded": "false",
+              "aria-label": "Add devices",
               title: "Add devices to the workbench",
             },
-            "＋ Devices",
+            h("span", { class: "rd-add-label-full", "aria-hidden": "true" }, "＋ Devices"),
+            h("span", { class: "rd-add-label-compact", "aria-hidden": "true" }, "Device ＋"),
           ),
           // The other half of the workbench: stage virtual controllers. The
           // daemon owns every consequence — numbering, the XInput ceiling,
@@ -7722,9 +8280,11 @@ export function RedesignIsland() {
               "data-nx": "rd-ctrls-open",
               "aria-controls": "rd-controller-picker",
               "aria-expanded": "false",
+              "aria-label": "Add controllers",
               title: "Stage virtual controllers on the workbench",
             },
-            "＋ Controllers",
+            h("span", { class: "rd-add-label-full", "aria-hidden": "true" }, "＋ Controllers"),
+            h("span", { class: "rd-add-label-compact", "aria-hidden": "true" }, "Pad ＋"),
           ),
           // Temporary internal research harness. It remains hidden from the
           // product chrome but stays mountable in the review fixtures that
@@ -7763,14 +8323,12 @@ export function RedesignIsland() {
               h("span", { id: "rd-apply-reason" }, () => rdApplyReason()),
               h("span", { id: "rd-stop-reason" }, () => rdStopReason()),
             ),
-            h("p", { class: "rd-action-guidance" }, () => rdActionGuidance()),
             h(
               "span",
               {
                 class: "rd-live-state",
                 "data-rd-live-status": "",
                 "data-live-chatter": "",
-                role: "status",
               },
               h("span", { class: "rd-live-short", "aria-hidden": "true" }),
               h("span", { class: "rd-live-detail" }),
@@ -7812,7 +8370,8 @@ export function RedesignIsland() {
                 {
                   type: "submit",
                   class: "rd-runbtn",
-                  disabled: () => rdSaveDisabled(),
+                  "aria-disabled": () => rdSaveDisabled(),
+                  "data-rd-product-disabled": () => rdSaveDisabled(),
                   "aria-describedby": "rd-save-reason",
                   title: () => rdSaveReason(),
                 },
@@ -7833,7 +8392,8 @@ export function RedesignIsland() {
                 {
                   type: "submit",
                   class: "rd-runbtn apply",
-                  disabled: () => rdApplyDisabled(),
+                  "aria-disabled": () => rdApplyDisabled(),
+                  "data-rd-product-disabled": () => rdApplyDisabled(),
                   "aria-describedby": "rd-apply-reason",
                   title: () => rdApplyReason(),
                 },
@@ -7859,7 +8419,8 @@ export function RedesignIsland() {
                 {
                   type: "submit",
                   class: "rd-runbtn replace",
-                  disabled: () => rdPlayDisabled(),
+                  "aria-disabled": () => rdPlayDisabled(),
+                  "data-rd-product-disabled": () => rdPlayDisabled(),
                   "aria-describedby": "rd-play-reason",
                   title: () => rdPlayReason(),
                 },
@@ -7880,7 +8441,8 @@ export function RedesignIsland() {
                 {
                   type: "submit",
                   class: "rd-runbtn primary",
-                  disabled: () => rdPlayDisabled(),
+                  "aria-disabled": () => rdPlayDisabled(),
+                  "data-rd-product-disabled": () => rdPlayDisabled(),
                   "aria-describedby": "rd-play-reason",
                   title: () => rdPlayReason(),
                 },
@@ -7897,7 +8459,8 @@ export function RedesignIsland() {
                 {
                   type: "submit",
                   class: "rd-runbtn stop",
-                  disabled: () => rdStopDisabled(),
+                  "aria-disabled": () => rdStopDisabled(),
+                  "data-rd-product-disabled": () => rdStopDisabled(),
                   "aria-describedby": "rd-stop-reason",
                   title: () => rdStopReason(),
                 },
@@ -8222,12 +8785,17 @@ export function RedesignIsland() {
               "Add places that physical device's own board on the canvas. Every added connected keyboard is an independent source and can map to any controller, including one already shared with another keyboard.",
             ),
             h(
-              "section",
+              "details",
               {
                 class: "rd-identify-card",
                 "data-rd-identify": "",
-                "aria-labelledby": "rd-identify-title",
               },
+              h(
+                "summary",
+                { class: "rd-identify-summary" },
+                h("span", null, "Identify a specific device"),
+                h("span", null, "For matching or unfamiliar device names"),
+              ),
               h(
                 "div",
                 { class: "rd-identify-copy" },
@@ -8538,6 +9106,56 @@ export function RedesignIsland() {
             ),
             h("p", { class: "n-devnote" }, () => rdCtrlAddNote()),
             h("p", { class: "n-devnote rd-ctrl-counts" }, () => rdCtrlCountsLine()),
+            h(
+              "section",
+              {
+                class: "rd-controller-sources",
+                "aria-labelledby": "rd-controller-add-source-label",
+              },
+              h("h3", { id: "rd-controller-add-source-label" }, "Input source"),
+              h(
+                "select",
+                {
+                  id: "rd-controller-add-source",
+                  class: "rd-controller-source",
+                  "data-nx": "rd-controller-add-source",
+                  "aria-labelledby": "rd-controller-add-source-label",
+                  "aria-describedby": "rd-controller-add-source-note rd-controller-add-layout",
+                },
+                h(
+                  "option",
+                  { value: "", disabled: "" },
+                  "No staged keyboard or encoder",
+                ),
+                createList(
+                  () => rdCtrlAddSources(),
+                  controllerAddSourceKey,
+                  (source) =>
+                    h(
+                      "option",
+                      {
+                        value: source.selector,
+                        selected: source.selected,
+                        disabled: source.disabled,
+                      },
+                      source.label,
+                    ),
+                ),
+              ),
+              h(
+                "p",
+                { id: "rd-controller-add-source-note" },
+                "The new controller starts with mappings from this exact device. Other inputs stay independent.",
+              ),
+              h(
+                "p",
+                { id: "rd-controller-add-layout", "data-rd-controller-add-layout": "" },
+                h("strong", null, "Starting layout · "),
+                h("span", null, () => rdCtrlAddLayoutLabel()),
+                " · ",
+                h("code", null, () => rdCtrlAddLayout()),
+              ),
+            ),
             h("h3", { class: "rd-devhead" }, "Pick what the next slot presents as"),
             createList(
               () => rdCtrlPersonas(),
@@ -8576,15 +9194,25 @@ export function RedesignIsland() {
                   }),
                   h(
                     "button",
-                    { type: "submit", class: r.cls, title: r.note },
+                    {
+                      type: "submit",
+                      class: r.cls,
+                      title: r.note,
+                      "aria-disabled": r.aria_disabled,
+                      "aria-describedby": r.reason_id,
+                    },
                     h(
                       "span",
                       { class: "n-dev-txt" },
                       h("span", { class: "n-dev-name" }, r.label),
                       h("span", { class: "n-dev-meta" }, r.api),
-                      h("span", { class: "n-dev-meta rd-ctrl-note" }, r.note),
+                      h(
+                        "span",
+                        { id: r.reason_id, class: "n-dev-meta rd-ctrl-note" },
+                        r.note,
+                      ),
                     ),
-                    h("span", { class: "n-dev-dot" }),
+                    h("span", { class: "rd-add-row-action", "aria-hidden": "true" }, r.action_label),
                   ),
                 ),
             ),
@@ -8756,8 +9384,50 @@ export function RedesignIsland() {
               "data-forma-canvas-viewport": "",
               "data-client-canvas": "",
               tabindex: "0",
-              "aria-label": "Redesign canvas",
+              "aria-label": "Workbench canvas",
             },
+            h(
+              "section",
+              {
+                class: "rd-canvas-empty",
+                "aria-labelledby": "rd-canvas-empty-title",
+                hidden: "",
+                inert: "",
+              },
+              h("span", { class: "rd-canvas-empty-mark", "aria-hidden": "true" }, "◇"),
+              h("h2", { id: "rd-canvas-empty-title" }, "Build your input flow"),
+              h(
+                "p",
+                null,
+                "Add the physical input you want to use, then add the virtual controller it will drive.",
+              ),
+              h(
+                "div",
+                { class: "rd-canvas-empty-actions" },
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    class: "rd-panel-action primary",
+                    "data-nx": "rd-empty-devs-open",
+                    "aria-controls": "rd-device-picker",
+                    "aria-expanded": "false",
+                  },
+                  "Add a device",
+                ),
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    class: "rd-panel-action",
+                    "data-nx": "rd-empty-ctrls-open",
+                    "aria-controls": "rd-controller-picker",
+                    "aria-expanded": "false",
+                  },
+                  "Add a controller",
+                ),
+              ),
+            ),
             h("div", { class: "forma-canvas-grid", "aria-hidden": "true" }),
             h(
               "div",
@@ -9453,7 +10123,7 @@ export function RedesignIsland() {
       ),
       h("div", { class: "rd-insp-body", "data-client-subtree": "" }),
     ),
-    // ── The command palette (⌘K / ⌘F) ─────────────────────────────────────
+    // ── The command palette (Ctrl/Cmd+K) ───────────────────────────────────
     // Served hidden; the result list is the one client-populated box.
     h(
       "div",
@@ -9468,12 +10138,24 @@ export function RedesignIsland() {
           "aria-modal": "true",
         },
         h("input", {
+          id: "rd-palette-input",
           class: "rd-palette-input",
           type: "text",
+          role: "combobox",
+          "aria-autocomplete": "list",
+          "aria-controls": "rd-palette-results",
+          "aria-expanded": "false",
+          "aria-haspopup": "listbox",
           placeholder: "Find a widget — or run a command",
           "aria-label": "Find a widget or run a command",
         }),
-        h("ol", { class: "rd-palette-list", "data-client-subtree": "" }),
+        h("ol", {
+          id: "rd-palette-results",
+          class: "rd-palette-list",
+          role: "listbox",
+          "aria-label": "Search results",
+          "data-client-subtree": "",
+        }),
       ),
     ),
     // ── The shortcut sheet (?) — Canvas control ───────────────────────────
@@ -9533,7 +10215,7 @@ export function RedesignIsland() {
             "dl",
             { class: "rd-sheet-col" },
             h("dt", { class: "rd-sheet-kick" }, "Chrome"),
-            h("dt", {}, "Ctrl K / Ctrl F"), h("dd", {}, "search and fly to a widget"),
+            h("dt", {}, "Ctrl/Cmd K"), h("dd", {}, "search and fly to a widget"),
             h("dt", {}, "M"), h("dd", {}, "minimap"),
             h("dt", {}, "V / H"), h("dd", {}, "select / hand tool"),
             h("dt", {}, "?"), h("dd", {}, "this sheet"),

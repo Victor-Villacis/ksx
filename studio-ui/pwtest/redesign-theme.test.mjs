@@ -150,6 +150,36 @@ async function ensureActiveKeyboard(page) {
 }
 
 describe("the redesign theme menu", () => {
+  test("a background refresh preserves every submitted value and one radio tab stop", async () => {
+    const page = await openRedesign();
+    try {
+      // Cross the two-second poll boundary: the hydrated list used to keep
+      // its labels while silently dropping each hidden form value.
+      await page.waitForTimeout(2_300);
+      await page.click(".rd-themed > summary");
+      const choices = await page.locator('[data-rd-form="theme"]').evaluateAll((forms) =>
+        forms.map((form) => ({
+          value: form.querySelector('input[name="theme"]')?.value ?? "",
+          checked: form.querySelector('[role="radio"]')?.getAttribute("aria-checked"),
+          tabIndex: form.querySelector('[role="radio"]')?.getAttribute("tabindex"),
+        })),
+      );
+      assert.deepEqual(
+        choices.map((choice) => choice.value),
+        ["system", "dark", "light", "matrix"],
+        "polling must not turn the four visible choices into empty POSTs",
+      );
+      assert.equal(
+        choices.filter((choice) => choice.checked === "true" && choice.tabIndex === "0").length,
+        1,
+        "the refreshed radio group keeps one selected keyboard entry point",
+      );
+      assert.deepEqual(page.ksxNoise, [], "the refreshed Theme menu must stay error-free");
+    } finally {
+      await page.close();
+    }
+  });
+
   test("a pick restamps <html> in place — no reload, flash spoken, marking moved", async () => {
     const page = await openRedesign();
     // The un-stamped opener: System in effect, no data-theme on <html>.
@@ -227,12 +257,12 @@ describe("the redesign theme menu", () => {
       () =>
         document
           .querySelector('.rd-thememenu form:has(input[value="matrix"]) button')
-          ?.getAttribute("aria-current") === "true",
+          ?.getAttribute("aria-checked") === "true",
       null,
       { timeout: 10_000 },
     );
     assert.equal(
-      await page.locator('.rd-thememenu form button[aria-current="true"]').count(),
+      await page.locator('.rd-thememenu form button[role="radio"][aria-checked="true"]').count(),
       1,
       "exactly one row claims to be current",
     );
@@ -284,7 +314,7 @@ describe("the redesign theme menu", () => {
   });
 
   test("Theme stays reachable beside the narrowest desktop Inspector", async () => {
-    const page = await openRedesign({ viewport: { width: 601, height: 900 } });
+    const page = await openRedesign({ viewport: { width: 761, height: 900 } });
     // This test owns the responsive collision, not key hit-testing at an
     // extreme semantic zoom. Put the real drawer into its real open geometry
     // deterministically, then exercise the Theme trigger without force.
@@ -403,7 +433,7 @@ describe("the redesign theme menu", () => {
     await page.click(".rd-themed > summary");
     assert.equal(
       await page
-        .locator('.rd-thememenu form:has(input[value="matrix"]) button[aria-current="true"]')
+        .locator('.rd-thememenu form:has(input[value="matrix"]) button[aria-checked="true"]')
         .count(),
       1,
       "the served marking agrees with the stamp",

@@ -15,7 +15,7 @@ import { cargoExecutable, stopFixtureProcess } from "./fixture-process.mjs";
 
 const PORT = Number(process.env.KSX_PWTEST_REDESIGN_LIFECYCLE_RESPONSIVE_PORT ?? 4545);
 const BASE = `http://127.0.0.1:${PORT}`;
-const COMPACT_PRIMARY_MAX = 1140;
+const COMPACT_PRIMARY_MAX = 1200;
 const RAIL_PREFERENCES_MIN = 1440;
 const BACK_VIEW_MIN = 1600;
 const FULL_CANVAS_CHROME_MIN = 1920;
@@ -110,7 +110,8 @@ async function openRunningDirtyBench() {
     () => {
       const form = document.querySelector('[data-rd-form="apply"]');
       const button = form?.querySelector("button");
-      return form && !form.classList.contains("none") && button && !button.disabled;
+      return form && !form.classList.contains("none") && button && !button.disabled &&
+        button.getAttribute("aria-disabled") === "false";
     },
     null,
     { timeout: 20_000 },
@@ -532,32 +533,38 @@ async function assertGlobalThemeKeyboard(page, width) {
     document.querySelector(".rd-theme-home .rd-themed")?.hasAttribute("open"));
   const choices = await theme.locator('[data-rd-form="theme"]').evaluateAll((forms) =>
     forms.map((form) => ({
-      current: form.querySelector("button")?.getAttribute("aria-current") === "true",
+      current: form.querySelector("button")?.getAttribute("aria-checked") === "true",
+      tabIndex: form.querySelector("button")?.getAttribute("tabindex") ?? "",
       value: form.querySelector('input[name="theme"]')?.value ?? "",
     })),
   );
-  const targetIndex = choices.findIndex((choice) => !choice.current && choice.value);
-  assert.ok(targetIndex >= 0, "fixture must expose an alternate Studio theme");
-  const targetTheme = choices[targetIndex].value;
-
-  // Enter opened the native details with focus still on its summary. Tab to
-  // the first row, then continue through the menu to the selected alternate.
-  for (let index = 0; index <= targetIndex; index += 1) {
-    await page.keyboard.press("Tab");
-  }
   assert.equal(
-    await page.evaluate(() =>
-      document.activeElement?.closest('[data-rd-form="theme"]')
-        ?.querySelector('input[name="theme"]')?.value ?? ""),
-    targetTheme,
-    `keyboard focus did not reach ${targetTheme} at ${width}px`,
+    choices.filter((choice) => choice.current && choice.tabIndex === "0").length,
+    1,
+    `Theme must expose exactly one selected roving tab stop at ${width}px`,
   );
-  await page.keyboard.press("Enter");
+  const currentIndex = choices.findIndex((choice) => choice.current);
+  assert.ok(currentIndex >= 0, "fixture must expose the selected Studio theme");
+  const targetIndex = (currentIndex + 1) % choices.length;
+  const targetTheme = choices[targetIndex].value;
+  assert.ok(targetTheme, "fixture must expose a next Studio theme");
+
+  // Enter opened the native details with focus still on its summary. A radio
+  // group is one Tab stop; arrows move and commit the checked choice, like a
+  // native radio set. Exercise the next choice circularly at every width.
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("ArrowDown");
   await page.waitForFunction((themeName) =>
     themeName === "system"
       ? !document.documentElement.hasAttribute("data-theme")
       : document.documentElement.dataset.theme === themeName,
   targetTheme);
+  assert.equal(
+    await page.evaluate(() =>
+      document.documentElement.dataset.theme ?? "system"),
+    targetTheme,
+    `keyboard selection did not reach ${targetTheme} at ${width}px`,
+  );
   await page.waitForFunction(() =>
     !document.querySelector(".rd-theme-home .rd-themed")?.hasAttribute("open"));
 
@@ -578,7 +585,7 @@ describe("the responsive redesign lifecycle rail", { concurrency: false }, () =>
       await lockAdverseRailState(page);
       for (const width of [
         390, 440, 441, 481, 520, 521, 600, 680, 681, 900,
-        1140, 1141, 1279, 1280,
+        1140, 1141, 1200, 1201, 1279, 1280,
         1439, 1440, 1599, 1600,
         1919, 1920,
       ]) {

@@ -7,7 +7,7 @@
 use forma_ir::parser::IrModule;
 use forma_ir::slot::SlotValue;
 
-use crate::snapshot::{NocturneChoiceRow, NocturneDeviceRow, NocturneOtherRow};
+use crate::snapshot::{NocturneDeviceRow, NocturneOtherRow};
 
 fn html_text(out: &mut String, value: &str) {
     for ch in value.chars() {
@@ -499,19 +499,6 @@ pub(crate) fn other_row(row: &NocturneOtherRow) -> SlotValue {
     SlotValue::object(vec![
         ("name".to_owned(), SlotValue::Text(row.name.clone())),
         ("meta".to_owned(), SlotValue::Text(row.meta.clone())),
-    ])
-}
-
-pub(crate) fn mode_row(row: &NocturneChoiceRow) -> SlotValue {
-    SlotValue::object(vec![
-        ("name".to_owned(), SlotValue::Text(row.name.clone())),
-        ("title".to_owned(), SlotValue::Text(row.title.clone())),
-        ("detail".to_owned(), SlotValue::Text(row.detail.clone())),
-        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
-        (
-            "chosen".to_owned(),
-            SlotValue::Text(if row.chosen { "true" } else { "false" }.to_owned()),
-        ),
     ])
 }
 

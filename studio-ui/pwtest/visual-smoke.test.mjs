@@ -1216,8 +1216,16 @@ describe("redesign canvas interaction chrome", () => {
       await page.getByRole("spinbutton", { name: "X", exact: true }).focus();
       await page.keyboard.press("Escape");
       assert.equal(await stageItem(CTRL_B).getAttribute("aria-current"), "true");
-      assert.equal(await page.locator(".rd-inspector").getAttribute("hidden"), null);
-      await page.locator('[data-nx="rd-insp-close"]').click();
+      assert.equal(
+        await page.locator(".rd-inspector").getAttribute("hidden"),
+        "",
+        "Escape did not dismiss the full-screen mobile Inspector",
+      );
+      assert.equal(
+        await stageItem(CTRL_B).evaluate((item) => item === document.activeElement),
+        true,
+        "dismissing the mobile Inspector did not restore focus to its controller",
+      );
 
       await page.keyboard.press("?");
       const mobileSheetFocus = await page.locator(".rd-sheet-lede").evaluate((lede) => {
@@ -1242,6 +1250,470 @@ describe("redesign canvas interaction chrome", () => {
       );
       await page.keyboard.press("Escape");
       assert.deepEqual(diagnostics, [], "/redesign emitted browser errors during interaction checks");
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("an explicit zoom consumes a same-turn canvas resize before observer delivery", async () => {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+      colorScheme: "dark",
+      reducedMotion: "reduce",
+      serviceWorkers: "block",
+    });
+    const page = await context.newPage();
+    try {
+      await seedKeyboardWorkbench(page);
+      const response = await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      assert.ok(response?.ok());
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      const board = await activateKeyboardSurface(page);
+      await page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }));
+      await page.locator(`.navigator-item[data-instance-id="${BENCH_A}"]`)
+        .evaluate((marker) => marker.click());
+      await page.waitForFunction(
+        (id) =>
+          document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)
+              ?.getAttribute("aria-current") === "true" &&
+          !document.querySelector(".is-camera-animating"),
+        BENCH_A,
+        { timeout: 20_000 },
+      );
+      await page.locator('.rd-map-head [data-nx="canvas-map"]').click();
+      await page.waitForFunction(
+        () => document.querySelector(".forma-canvas-navigator")?.hidden === true,
+      );
+
+      await page.locator('[data-nx="rd-zoom-menu"]').click();
+      await page.locator('[data-nx="rd-z-25"]:visible').waitFor();
+      // Force a real canvas-only resize and invoke the visible zoom command in
+      // the SAME task. ResizeObserver must deliver after this task; without
+      // reconciliation the old centre delta is replayed onto the new camera.
+      await page.evaluate(() => {
+        const canvas = document.querySelector(".n-canvas");
+        const viewport = document.querySelector(".forma-canvas-viewport");
+        const zoom = document.querySelector('[data-nx="rd-z-25"]');
+        if (!(canvas instanceof HTMLElement) || !(viewport instanceof HTMLElement) ||
+            !(zoom instanceof HTMLElement)) {
+          throw new Error("resize/zoom regression controls are unavailable");
+        }
+        canvas.style.flex = "0 0 354px";
+        canvas.style.width = "354px";
+        void viewport.getBoundingClientRect().width;
+        zoom.click();
+      });
+      await page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }));
+
+      const geometry = await board.evaluate((item) => {
+        const viewport = document.querySelector(".forma-canvas-viewport");
+        if (!(viewport instanceof HTMLElement)) return null;
+        const itemRect = item.getBoundingClientRect();
+        const viewportRect = viewport.getBoundingClientRect();
+        const point = {
+          x: (itemRect.left + itemRect.right) / 2,
+          y: (itemRect.top + itemRect.bottom) / 2,
+        };
+        const hit = document.elementFromPoint(point.x, point.y);
+        return {
+          item: {
+            left: itemRect.left,
+            top: itemRect.top,
+            right: itemRect.right,
+            bottom: itemRect.bottom,
+          },
+          viewport: {
+            left: viewportRect.left,
+            top: viewportRect.top,
+            right: viewportRect.right,
+            bottom: viewportRect.bottom,
+          },
+          inViewport: itemRect.left >= viewportRect.left - 0.5 &&
+            itemRect.top >= viewportRect.top - 0.5 &&
+            itemRect.right <= viewportRect.right + 0.5 &&
+            itemRect.bottom <= viewportRect.bottom + 0.5,
+          hitTestable: hit === item || item.contains(hit),
+          hit: hit instanceof HTMLElement
+            ? { tag: hit.tagName, className: hit.className }
+            : null,
+        };
+      });
+      assert.ok(geometry, "the resized canvas lost its keyboard target");
+      assert.equal(
+        geometry.inViewport && geometry.hitTestable,
+        true,
+        `same-turn resize + zoom lost its canvas target: ${JSON.stringify(geometry)}`,
+      );
+      assert.equal(await page.locator(".n-zoomval").textContent(), "25%");
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("Focus preserves its entry camera across same-turn viewport resize boundaries", async () => {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+      colorScheme: "dark",
+      reducedMotion: "reduce",
+      serviceWorkers: "block",
+    });
+    const page = await context.newPage();
+    try {
+      await seedKeyboardWorkbench(page);
+      const response = await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      assert.ok(response?.ok());
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await activateKeyboardSurface(page);
+      await page.locator(`.navigator-item[data-instance-id="${BENCH_A}"]`)
+        .evaluate((marker) => marker.click());
+      await page.waitForFunction(
+        (id) =>
+          document.querySelector(`.forma-canvas-stage > [data-instance-id="${id}"]`)
+              ?.getAttribute("aria-current") === "true" &&
+          !document.querySelector(".is-camera-animating"),
+        BENCH_A,
+        { timeout: 20_000 },
+      );
+      // Navigator framing deliberately retains a short landing target for
+      // late widget measurements. An explicit zoom ends that transaction so
+      // this test isolates Focus's own entry-camera contract.
+      await page.locator('[data-nx="canvas-zoom-in"]').click();
+      await page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }));
+
+      const cameraCenter = async () => page.evaluate(() => {
+        const stage = document.querySelector(".forma-canvas-stage");
+        const viewport = document.querySelector(".forma-canvas-viewport");
+        if (!(stage instanceof HTMLElement) || !(viewport instanceof HTMLElement)) return null;
+        const match = stage.style.transform.match(
+          /translate\(([-\d.]+)px,\s*([-\d.]+)px\) scale\(([-\d.]+)\)/,
+        );
+        if (!match) return null;
+        const panX = Number(match[1]);
+        const panY = Number(match[2]);
+        const zoom = Number(match[3]);
+        const rect = viewport.getBoundingClientRect();
+        return {
+          worldX: (rect.width / 2 - panX) / zoom,
+          worldY: (rect.height / 2 - panY) / zoom,
+          zoom,
+        };
+      });
+      const pressFocus = async () => {
+        await page.locator(
+          `.forma-canvas-stage > [data-instance-id="${BENCH_A}"]`,
+        ).focus();
+        await page.keyboard.press("f");
+      };
+      const waitForFocus = (active) => page.waitForFunction(
+        (wanted) =>
+          document.querySelector(".forma-canvas-viewport")?.dataset.widgetFocusMode ===
+            (wanted ? "active" : "inactive") &&
+          !document.querySelector(".is-camera-animating"),
+        active,
+      );
+      const assertSameCameraCenter = (before, after, phase) => {
+        assert.ok(before && after, `${phase} lost its camera state`);
+        assert.ok(
+          Math.abs(after.worldX - before.worldX) < 0.02,
+          `${phase} moved world X: ${JSON.stringify({ before, after })}`,
+        );
+        assert.ok(
+          Math.abs(after.worldY - before.worldY) < 0.02,
+          `${phase} moved world Y: ${JSON.stringify({ before, after })}`,
+        );
+        assert.ok(
+          Math.abs(after.zoom - before.zoom) < 0.001,
+          `${phase} changed zoom: ${JSON.stringify({ before, after })}`,
+        );
+      };
+
+      // Enter Focus in the same task that narrows only the canvas. The entry
+      // snapshot must consume that painted size before ResizeObserver later
+      // reports it, or exiting restores the old-frame pan.
+      const beforeEntryResize = await cameraCenter();
+      await page.evaluate((id) => {
+        const canvas = document.querySelector(".n-canvas");
+        const viewport = document.querySelector(".forma-canvas-viewport");
+        const item = document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"]`,
+        );
+        if (!(canvas instanceof HTMLElement) || !(viewport instanceof HTMLElement)) {
+          throw new Error("Focus resize regression canvas is unavailable");
+        }
+        if (!(item instanceof HTMLElement)) throw new Error("Focus resize item is unavailable");
+        item.focus({ preventScroll: true });
+        canvas.style.flex = "0 0 760px";
+        canvas.style.width = "760px";
+        void viewport.getBoundingClientRect().width;
+        item.dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "f",
+        }));
+      }, BENCH_A);
+      await waitForFocus(true);
+      await page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }));
+      await pressFocus();
+      await waitForFocus(false);
+      assertSameCameraCenter(
+        beforeEntryResize,
+        await cameraCenter(),
+        "same-turn resize before Focus entry",
+      );
+
+      // The reverse ordering is independently hazardous: if Focus restores
+      // against the new box without advancing the resize baseline, the late
+      // observer applies the same centre delta a second time.
+      const beforeExitResize = await cameraCenter();
+      await pressFocus();
+      await waitForFocus(true);
+      await page.evaluate((id) => {
+        const canvas = document.querySelector(".n-canvas");
+        const viewport = document.querySelector(".forma-canvas-viewport");
+        const item = document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"]`,
+        );
+        if (!(canvas instanceof HTMLElement) || !(viewport instanceof HTMLElement)) {
+          throw new Error("Focus exit resize regression canvas is unavailable");
+        }
+        if (!(item instanceof HTMLElement)) throw new Error("Focus exit item is unavailable");
+        item.focus({ preventScroll: true });
+        canvas.style.flex = "0 0 430px";
+        canvas.style.width = "430px";
+        void viewport.getBoundingClientRect().width;
+        item.dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "f",
+        }));
+      }, BENCH_A);
+      await waitForFocus(false);
+      await page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }));
+      assertSameCameraCenter(
+        beforeExitResize,
+        await cameraCenter(),
+        "same-turn resize during Focus exit",
+      );
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("device-control reveal survives a same-turn viewport resize", async () => {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+      colorScheme: "dark",
+      reducedMotion: "reduce",
+      serviceWorkers: "block",
+    });
+    const page = await context.newPage();
+    try {
+      await seedRealDeviceWorkbench(page);
+      const response = await page.goto(`${BASE}/redesign`, { waitUntil: "domcontentloaded" });
+      assert.ok(response?.ok());
+      await page.waitForFunction(
+        () => document.querySelector("[data-forma-island]")?.dataset.formaStatus === "active",
+        null,
+        { timeout: 20_000 },
+      );
+      await page.waitForFunction(
+        (id) => document.querySelector(
+          `.forma-canvas-stage > [data-instance-id="${id}"]`,
+        )?.dataset.canvasX !== undefined,
+        BENCH_B,
+        { timeout: 20_000 },
+      );
+      const board = page.locator(
+        `.forma-canvas-stage > [data-instance-id="${BENCH_B}"]`,
+      );
+      const launcher = board.locator('[data-nx="rd-open-device-controls"]');
+      if (await launcher.isVisible()) await launcher.click();
+      await page.waitForFunction(
+        (id) => {
+          const item = document.querySelector(
+            `.forma-canvas-stage > [data-instance-id="${id}"]`,
+          );
+          const operations = item?.querySelector("[data-rd-device-operations]");
+          return item?.dataset.encoderEditable === "true" &&
+            operations instanceof HTMLElement && !operations.hidden && !operations.inert &&
+            !document.querySelector(".is-camera-animating");
+        },
+        BENCH_B,
+        { timeout: 20_000 },
+      );
+      const details = board.locator("[data-rd-device-capture]");
+      await details.evaluate((element) => {
+        element.open = true;
+      });
+      // Let the disclosure's own height and internal scrolling settle before
+      // isolating the pending viewport-resize race below.
+      await page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }));
+
+      // Queue the resize before dispatching the disclosure event. The product
+      // then queues revealElement behind it in the same animation frame,
+      // leaving ResizeObserver deliberately late.
+      const beforeReveal = await details.evaluate((element) => new Promise((resolve, reject) => {
+        const target = element.querySelector('button[type="submit"]:not(:disabled)') ??
+          element.querySelector("input:not(:disabled)");
+        const canvas = document.querySelector(".n-canvas");
+        const viewport = document.querySelector(".forma-canvas-viewport");
+        if (!(target instanceof HTMLElement) || !(canvas instanceof HTMLElement) ||
+            !(viewport instanceof HTMLElement)) {
+          reject(new Error("device reveal regression controls are unavailable"));
+          return;
+        }
+        target.scrollIntoView = () => {
+          target.dataset.regressionScrollCalls = String(
+            Number(target.dataset.regressionScrollCalls ?? "0") + 1,
+          );
+        };
+        let resizedGeometry;
+        requestAnimationFrame(() => {
+          canvas.style.flex = "0 0 354px";
+          canvas.style.width = "354px";
+          const viewportRect = viewport.getBoundingClientRect();
+          const targetRect = target.getBoundingClientRect();
+          const stage = document.querySelector(".forma-canvas-stage");
+          resizedGeometry = {
+            outside: targetRect.left < viewportRect.left + 18 ||
+              targetRect.right > viewportRect.right - 18 ||
+              targetRect.top < viewportRect.top + 18 ||
+              targetRect.bottom > viewportRect.bottom - 18,
+            target: {
+              left: targetRect.left,
+              top: targetRect.top,
+              right: targetRect.right,
+              bottom: targetRect.bottom,
+            },
+            viewport: {
+              left: viewportRect.left,
+              top: viewportRect.top,
+              right: viewportRect.right,
+              bottom: viewportRect.bottom,
+            },
+            transform: stage instanceof HTMLElement ? stage.style.transform : "",
+          };
+        });
+        // Synthetic dispatch makes the ordering independent of the browser's
+        // native toggle-task coalescing while leaving the settled disclosure
+        // open. The event follows the same delegated product path.
+        element.dispatchEvent(new Event("toggle"));
+        // This callback is queued after the product's initial reveal callback
+        // but before ResizeObserver delivery. Replacing the control models an
+        // island refresh during the semantic landing window: the canvas must
+        // re-resolve the equivalent control by its item-scoped reveal key.
+        requestAnimationFrame(() => {
+          const replacement = target.cloneNode(true);
+          if (!(replacement instanceof HTMLElement) || !resizedGeometry) {
+            reject(new Error("device reveal replacement could not be staged"));
+            return;
+          }
+          replacement.dataset.regressionReplacement = "true";
+          replacement.scrollIntoView = () => {
+            replacement.dataset.regressionScrollCalls = String(
+              Number(replacement.dataset.regressionScrollCalls ?? "0") + 1,
+            );
+          };
+          target.replaceWith(replacement);
+          // A slow CI runner can spend longer than the old 70ms landing pad
+          // inside one rendering opportunity. Queue a second-axis disclosure
+          // settle for the NEXT opportunity, then deliberately keep this one
+          // busy long enough that a timer-only contract would expire first.
+          requestAnimationFrame(() => {
+            element.style.paddingTop = "180px";
+            element.dataset.regressionLateSettle = "true";
+          });
+          const blockedAt = performance.now();
+          const blockedUntil = blockedAt + 120;
+          while (performance.now() < blockedUntil) {
+            // Intentionally block this rendering opportunity.
+          }
+          resolve({
+            ...resizedGeometry,
+            replaced: !target.isConnected,
+            blockedMs: performance.now() - blockedAt,
+          });
+        });
+      }));
+      assert.equal(
+        beforeReveal.outside,
+        true,
+        `the reveal regression did not begin clipped: ${JSON.stringify(beforeReveal)}`,
+      );
+      assert.equal(beforeReveal.replaced, true, "the keyed capture control was not replaced");
+      assert.ok(
+        beforeReveal.blockedMs >= 115,
+        `the slow-frame regression did not outlive the landing pad: ${beforeReveal.blockedMs}`,
+      );
+      await page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }));
+
+      const afterReveal = await details.evaluate((element) => {
+        const target = element.querySelector('button[type="submit"]:not(:disabled)') ??
+          element.querySelector("input:not(:disabled)");
+        const viewport = document.querySelector(".forma-canvas-viewport");
+        const stage = document.querySelector(".forma-canvas-stage");
+        if (!(target instanceof HTMLElement) || !(viewport instanceof HTMLElement)) return null;
+        const targetRect = target.getBoundingClientRect();
+        const viewportRect = viewport.getBoundingClientRect();
+        const point = {
+          x: targetRect.left + targetRect.width / 2,
+          y: targetRect.top + targetRect.height / 2,
+        };
+        const hit = document.elementFromPoint(point.x, point.y);
+        return {
+          inside: targetRect.left >= viewportRect.left + 17.5 &&
+            targetRect.right <= viewportRect.right - 17.5 &&
+            targetRect.top >= viewportRect.top + 17.5 &&
+            targetRect.bottom <= viewportRect.bottom - 17.5,
+          hitTestable: hit === target || target.contains(hit),
+          replacement: target.dataset.regressionReplacement === "true",
+          lateSettle: element.dataset.regressionLateSettle === "true",
+          scrollCalls: target.dataset.regressionScrollCalls ?? "0",
+          transform: stage instanceof HTMLElement ? stage.style.transform : "",
+          target: {
+            left: targetRect.left,
+            top: targetRect.top,
+            right: targetRect.right,
+            bottom: targetRect.bottom,
+          },
+          viewport: {
+            left: viewportRect.left,
+            top: viewportRect.top,
+            right: viewportRect.right,
+            bottom: viewportRect.bottom,
+          },
+        };
+      });
+      assert.ok(afterReveal, "the device reveal target disappeared after resize delivery");
+      assert.equal(afterReveal.replacement, true, "the reveal target fell back to the stale control");
+      assert.equal(afterReveal.lateSettle, true, "the second-axis disclosure settle did not run");
+      assert.equal(
+        afterReveal.inside && afterReveal.hitTestable,
+        true,
+        `the late resize displaced the revealed device control: ${JSON.stringify({ beforeReveal, afterReveal })}`,
+      );
     } finally {
       await context.close();
     }

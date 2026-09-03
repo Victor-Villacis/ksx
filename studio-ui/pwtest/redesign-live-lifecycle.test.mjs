@@ -265,7 +265,9 @@ describe("redesign mutable live lifecycle", { concurrency: false }, () => {
     await prepare.locator('button[type="submit"]').click();
     await page.waitForFunction(
       () => Array.from(document.querySelectorAll('[data-rd-form="play"] button')).some(
-        (button) => !button.disabled && button.offsetParent !== null,
+        (button) => !button.disabled &&
+          button.getAttribute("aria-disabled") === "false" &&
+          button.offsetParent !== null,
       ),
       null,
       { timeout: 20_000 },

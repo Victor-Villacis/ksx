@@ -421,6 +421,120 @@ function restoreCardFocus(card: HTMLElement, selector: string | null): void {
   }
 }
 
+function controllerControlCenter(control: SVGElement): { x: number; y: number } | null {
+  const rect = control.getBoundingClientRect();
+  if (rect.width <= 0 && rect.height <= 0) return null;
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}
+
+function controllerDirectionalControl(
+  controls: readonly SVGElement[],
+  current: SVGElement,
+  key: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown",
+): SVGElement | null {
+  const origin = controllerControlCenter(current);
+  if (origin) {
+    const directional = controls.flatMap((candidate) => {
+      if (candidate === current) return [];
+      const point = controllerControlCenter(candidate);
+      if (!point) return [];
+      const dx = point.x - origin.x;
+      const dy = point.y - origin.y;
+      const primary = key === "ArrowLeft"
+        ? -dx
+        : key === "ArrowRight"
+          ? dx
+          : key === "ArrowUp"
+            ? -dy
+            : dy;
+      if (primary <= 0.5) return [];
+      const secondary = key === "ArrowLeft" || key === "ArrowRight"
+        ? Math.abs(dy)
+        : Math.abs(dx);
+      // Prefer the nearest control in the requested half-plane, with enough
+      // cross-axis weight that Right follows a visual row instead of jumping
+      // diagonally across the controller silhouette.
+      return [{ candidate, score: primary + secondary * 2 }];
+    }).sort((left, right) => left.score - right.score);
+    if (directional[0]) return directional[0].candidate;
+  }
+
+  // Geometry can be unavailable in a detached/test SVG. Stable served order
+  // is still a deterministic and complete keyboard path.
+  const index = controls.indexOf(current);
+  const step = key === "ArrowLeft" || key === "ArrowUp" ? -1 : 1;
+  return controls[index + step] ?? null;
+}
+
+function setControllerRovingControl(
+  controls: readonly SVGElement[],
+  requested: SVGElement | null,
+  moveFocus: boolean,
+): void {
+  const target = requested && controls.includes(requested) ? requested : controls[0] ?? null;
+  for (const control of controls) {
+    control.setAttribute("tabindex", control === target ? "0" : "-1");
+  }
+  if (moveFocus && target) target.focus({ preventScroll: true });
+}
+
+export function installControllerRovingFocus(
+  clone: SVGSVGElement,
+  controls: readonly SVGElement[],
+): void {
+  // Chromium otherwise treats an SVG root with focusable descendants as an
+  // extra sequential stop before the roving control itself.
+  clone.setAttribute("tabindex", "-1");
+  setControllerRovingControl(controls, null, false);
+  clone.addEventListener("focusin", (event) => {
+    const target = event.target instanceof Element
+      ? event.target.closest<SVGElement>("[data-rd-pad-action]")
+      : null;
+    if (target && clone.contains(target)) setControllerRovingControl(controls, target, false);
+  });
+  clone.addEventListener("keydown", (event) => {
+    const current = event.target instanceof Element
+      ? event.target.closest<SVGElement>("[data-rd-pad-action]")
+      : null;
+    if (!current || !clone.contains(current)) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      event.stopPropagation();
+      current.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        view: clone.ownerDocument.defaultView,
+        shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+      }));
+      return;
+    }
+    if (event.altKey || event.metaKey) return;
+
+    let target: SVGElement | null = null;
+    if (
+      !event.ctrlKey &&
+      (event.key === "ArrowLeft" || event.key === "ArrowRight" ||
+        event.key === "ArrowUp" || event.key === "ArrowDown")
+    ) {
+      target = controllerDirectionalControl(controls, current, event.key);
+    } else if (event.key === "Home") {
+      target = controls[0] ?? null;
+    } else if (event.key === "End") {
+      target = controls.at(-1) ?? null;
+    } else {
+      return;
+    }
+    // Consume directional keys at the composite boundary so an edge press
+    // never falls through to the canvas widget's nudge shortcuts.
+    event.preventDefault();
+    event.stopPropagation();
+    if (target) setControllerRovingControl(controls, target, true);
+  });
+}
+
 /** The REAL body — a CLONE of the shared hidden master for the served
  *  family (the nocturne widget's exact mechanism: `pv.family` is READ,
  *  never re-decided; a family with no master is a visible failure), dressed
@@ -449,6 +563,7 @@ function padBody(
   clone.removeAttribute("focusable");
   clone.setAttribute("role", "group");
   clone.setAttribute("aria-label", personaLabel || PERSONA_BADGE_FALLBACK);
+  clone.setAttribute("aria-description", "Use arrow keys to move between controller controls.");
   // Dress the callouts from THIS slot's own served table (empty for a
   // ghost, whose slot left the daemon).
   const byFn = new Map<string, string>();
@@ -473,6 +588,7 @@ function padBody(
     (controls ?? []).map((control) => [control.function.toLowerCase(), control.label]),
   );
   const focusableFns = new Set<string>();
+  const focusableControls: SVGElement[] = [];
   const padZones = Array.from(
     clone.querySelectorAll<SVGElement>("[data-fn]:not(.n-fnkey)"),
   );
@@ -491,24 +607,12 @@ function padBody(
     focusableFns.add(key);
     const label = labels.get(key) || fnName;
     el.setAttribute("role", "button");
-    el.setAttribute("tabindex", "0");
+    el.setAttribute("tabindex", "-1");
     el.setAttribute("aria-label", `${label} controller control`);
     el.setAttribute("data-rd-pad-action", "");
-    el.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      event.stopPropagation();
-      el.dispatchEvent(new MouseEvent("click", {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        shiftKey: event.shiftKey,
-        ctrlKey: event.ctrlKey,
-        altKey: event.altKey,
-        metaKey: event.metaKey,
-      }));
-    });
+    focusableControls.push(el);
   }
+  installControllerRovingFocus(clone, focusableControls);
   // The finish swatches — the nocturne widget's DS4-variant / premium
   // machinery, off the SHARED padFinishes module and stores.
   let swatches: HTMLElement | null = null;

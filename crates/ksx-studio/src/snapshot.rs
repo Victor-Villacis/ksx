@@ -1375,6 +1375,22 @@ pub struct RedesignPersonaRow {
     pub usable: String,
 }
 
+/// One exact staged input offered by Add Controller.
+///
+/// This roster deliberately belongs to staging rather than device discovery:
+/// a refused scan makes connection state unknown, but it does not erase the
+/// durable sources already in the mapping draft.  Keeping the opaque revision
+/// beside the selector also lets the browser change choices without deriving
+/// mutation authority from display text.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedesignControllerSourceRow {
+    pub selector: String,
+    pub revision: String,
+    pub label: String,
+    pub selected: bool,
+    pub disabled: bool,
+}
+
 /// The controller picker's truth and the workbench's staged cards, composed
 /// from the ONE [`ksx_api::StagedSetupView`] the collector already holds —
 /// every ceiling (`max_slots`, `max_xinput_slots`) and every availability
@@ -1397,6 +1413,18 @@ pub struct RedesignControllers {
     pub add_source: String,
     #[serde(default)]
     pub add_source_revision: String,
+    /// Every staged input source, independent of the best-effort hardware
+    /// scan. Older payload producers omit this field; the island retains its
+    /// scan-row compatibility fallback during a rolling upgrade.
+    #[serde(default)]
+    pub add_sources: Vec<RedesignControllerSourceRow>,
+    /// `ready`, `missing`, or `unavailable`. The distinction is user-facing:
+    /// an outage must never instruct someone to add hardware that is already
+    /// present in an unreadable draft.
+    #[serde(default)]
+    pub add_source_state: String,
+    #[serde(default)]
+    pub add_source_reason: String,
     pub cards: Vec<RedesignControllerCard>,
     pub personas: Vec<RedesignPersonaRow>,
     /// `next_preset`, served because it becomes a FILE NAME (stage.rs's
@@ -1406,6 +1434,11 @@ pub struct RedesignControllers {
     /// so a first-run controller binds keys and is playable without a mapper
     /// (MAPPER-UX commandment 9).
     pub add_layout: String,
+    /// Human-readable label for `add_layout`, from the daemon's served
+    /// template roster. The id still travels separately into the guarded
+    /// form; this is presentation only.
+    #[serde(default)]
+    pub add_layout_label: String,
     /// The lede over the picker: what adding does, or why nothing can be
     /// added (full / unreachable), in the server's words.
     pub add_note: String,
@@ -1485,14 +1518,27 @@ impl RedesignControllers {
         let exact_add_source = selected_source
             .map(str::trim)
             .filter(|source| !source.is_empty());
-        let add_device = if let Some(selector) = exact_add_source {
-            staged
-                .devices
-                .iter()
-                .find(|device| same_device_selector(&device.selector, selector))
+        // `devices` is the canonical multi-source roster. `device` is the
+        // compatibility projection used by older daemon producers, and must
+        // remain a real Add source when the canonical field is absent.
+        let add_devices = if staged.devices.is_empty() {
+            staged.device.iter().collect::<Vec<_>>()
         } else {
-            staged.devices.first()
+            staged.devices.iter().collect::<Vec<_>>()
         };
+        // Prefer the exact source already in the URL when it belongs to the
+        // roster. A stale source is not allowed to leave an otherwise valid
+        // picker inert: Add Controller is new composition intent, so it may
+        // safely fall back to the first staged input without changing the
+        // selected controller's separately-qualified authoring source.
+        let add_device = exact_add_source
+            .and_then(|selector| {
+                add_devices
+                    .iter()
+                    .copied()
+                    .find(|device| same_device_selector(&device.selector, selector))
+            })
+            .or_else(|| add_devices.first().copied());
         let source = selected.and_then(|slot| selected_source_view(staged, slot, selected_source));
         let panel = compose_controller_panel_for_source(staged, selected, source.as_ref(), q);
         // The macro lifecycle rows + the step editor, exactly nocturne's
@@ -1600,11 +1646,29 @@ impl RedesignControllers {
                 }
             })
             .collect();
+        let add_source_ready = add_device.is_some();
+        let (add_source_state, add_source_reason) = if !staged.reachable {
+            (
+                "unavailable".to_owned(),
+                staged.error.clone().unwrap_or_else(|| {
+                    "Controller setup is temporarily unavailable because the background helper is not answering."
+                        .to_owned()
+                }),
+            )
+        } else if !add_source_ready {
+            (
+                "missing".to_owned(),
+                "Add a keyboard or encoder to the canvas before adding a controller.".to_owned(),
+            )
+        } else {
+            ("ready".to_owned(), String::new())
+        };
         let personas = staged
             .personas
             .iter()
             .map(|persona| {
-                let usable = staged.reachable && persona.can_plug && persona.available;
+                let usable =
+                    staged.reachable && add_source_ready && persona.can_plug && persona.available;
                 RedesignPersonaRow {
                     name: persona.name.clone(),
                     label: persona.label.clone(),
@@ -1613,11 +1677,15 @@ impl RedesignControllers {
                     } else {
                         persona.backend_label.clone()
                     },
-                    note: persona
-                        .unavailable_reason
-                        .clone()
-                        .or_else(|| persona.gap.clone())
-                        .unwrap_or_default(),
+                    note: if add_source_state != "ready" {
+                        add_source_reason.clone()
+                    } else {
+                        persona
+                            .unavailable_reason
+                            .clone()
+                            .or_else(|| persona.gap.clone())
+                            .unwrap_or_default()
+                    },
                     cls: if usable { "n-dev" } else { "n-dev off" }.to_owned(),
                     usable: if usable { "true" } else { "false" }.to_owned(),
                 }
@@ -1628,12 +1696,50 @@ impl RedesignControllers {
                 .error
                 .clone()
                 .unwrap_or_else(|| "The daemon is not answering.".to_owned())
+        } else if !add_source_ready {
+            "Add a keyboard or encoder to the canvas before adding a controller.".to_owned()
         } else if staged.next_slot.is_none() {
             // The nocturne create form's own full-house sentence, verbatim.
             "Every controller slot is staged. Remove one to add another.".to_owned()
         } else {
             "Adding stages the next slot — nothing is saved or started until Play.".to_owned()
         };
+        let add_layout = staged.default_layout.clone();
+        let add_layout_label = staged
+            .layouts
+            .iter()
+            .find(|layout| layout.id == add_layout)
+            .map(|layout| layout.label.trim())
+            .filter(|label| !label.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| add_layout.clone());
+        let add_sources = add_devices
+            .into_iter()
+            .map(|device| {
+                let revision = ksx_api::staged_device_revision(device);
+                let name = if !device.label.trim().is_empty() {
+                    device.label.trim()
+                } else if !device.alias.trim().is_empty() {
+                    device.alias.trim()
+                } else {
+                    "Input source"
+                };
+                let connection = device_connection_label(&device.selector);
+                RedesignControllerSourceRow {
+                    selector: device.selector.clone(),
+                    revision: revision.clone(),
+                    label: if connection.trim().is_empty() {
+                        name.to_owned()
+                    } else {
+                        format!("{name} · {connection}")
+                    },
+                    selected: add_device.is_some_and(|selected| {
+                        same_device_selector(&selected.selector, &device.selector)
+                    }),
+                    disabled: !staged.reachable || revision.trim().is_empty(),
+                }
+            })
+            .collect();
         Self {
             source: source
                 .as_ref()
@@ -1653,6 +1759,9 @@ impl RedesignControllers {
             add_source_revision: add_device
                 .map(ksx_api::staged_device_revision)
                 .unwrap_or_default(),
+            add_sources,
+            add_source_state,
+            add_source_reason,
             counts_line: format!(
                 "{} of {} slots staged · {} of {} Xbox (XInput)",
                 staged.slots.len(),
@@ -1661,7 +1770,8 @@ impl RedesignControllers {
                 staged.max_xinput_slots,
             ),
             add_preset: staged.next_preset.clone().unwrap_or_default(),
-            add_layout: staged.default_layout.clone(),
+            add_layout,
+            add_layout_label,
             add_note,
             reachable: staged.reachable,
             cards,
@@ -2498,8 +2608,8 @@ pub fn theme_rows(setup: &SetupSnapshot) -> Vec<SetupThemeRowView> {
     let system_set = readable && view.theme.is_empty();
     let system_fallback = readable && !view.theme.is_empty() && !known;
     // `chosen_cls` is not a status chip — it is the CLASS OF THE ROW'S OWN
-    // SUBMIT BUTTON (`render_nocturne.rs` pushes these rows through `mode_row`,
-    // the same serializer the blocking rows use, and the island renders
+    // SUBMIT BUTTON (`render_redesign.rs` pushes these rows through its
+    // choice-row slot serializer, and the island renders
     // `h("button", { type: "submit", class: r.cls }, …)`). So it must speak the
     // surviving surface's idiom, `n-radio`, the way the doc comment above has
     // always claimed it does.
@@ -7804,6 +7914,103 @@ mod tests {
         );
         assert_eq!(moved_view.cards[0].identity_key, "slot:2:xbox360");
         assert_eq!(moved_view.cards[0].display_name, "Player 2 · Xbox 360");
+    }
+
+    #[test]
+    fn controller_add_roster_is_staged_authority_with_legacy_fallback() {
+        let left = staged_device("usb:1111:0001:00", "left", "Left keyboard");
+        let right = staged_device("usb:2222:0002:00", "right", "Right keyboard");
+        let setup = staged_multi_source(vec![left.clone(), right.clone()], Vec::new());
+        let view =
+            RedesignControllers::of_source(&setup, None, Some(&right.selector), None, None, None);
+
+        assert_eq!(view.add_source_state, "ready");
+        assert!(view.add_source_reason.is_empty());
+        assert_eq!(view.add_source, right.selector);
+        assert_eq!(view.add_sources.len(), 2);
+        let left_revision = ksx_api::staged_device_revision(&left);
+        let right_revision = ksx_api::staged_device_revision(&right);
+        assert_eq!(
+            view.add_sources
+                .iter()
+                .map(|row| (row.label.as_str(), row.revision.as_str(), row.selected))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "Left keyboard · USB 1111:0001 · connection 00",
+                    left_revision.as_str(),
+                    false,
+                ),
+                (
+                    "Right keyboard · USB 2222:0002 · connection 00",
+                    right_revision.as_str(),
+                    true,
+                ),
+            ]
+        );
+
+        // A stale inspector URL does not silently change that controller's
+        // authoring source, but Add Controller remains usable and defaults to
+        // the first source in the independent composition roster.
+        let stale = RedesignControllers::of_source(
+            &setup,
+            None,
+            Some("usb:ffff:ffff:99"),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(stale.add_source, left.selector);
+        assert!(stale.add_sources[0].selected);
+
+        // Older producers sent only `device`; that compatibility projection
+        // remains a fully guarded source rather than yielding an empty menu.
+        let mut legacy = setup;
+        legacy.devices.clear();
+        legacy.device = Some(left.clone());
+        let legacy_view = RedesignControllers::of(&legacy, None, None, None, None);
+        assert_eq!(legacy_view.add_source, left.selector);
+        assert_eq!(legacy_view.add_sources.len(), 1);
+        assert_eq!(
+            legacy_view.add_sources[0].revision,
+            ksx_api::staged_device_revision(&left)
+        );
+        assert!(legacy_view.add_sources[0].selected);
+        assert!(!legacy_view.add_sources[0].disabled);
+    }
+
+    #[test]
+    fn controller_add_distinguishes_missing_source_from_staging_outage() {
+        let mut missing = staged_multi_source(Vec::new(), Vec::new());
+        missing.personas = vec![ksx_api::PersonaOption {
+            name: "xbox360".into(),
+            label: "Xbox 360 pad".into(),
+            can_plug: true,
+            available: true,
+            ..Default::default()
+        }];
+        let missing_view = RedesignControllers::of(&missing, None, None, None, None);
+        assert_eq!(missing_view.add_source_state, "missing");
+        assert!(missing_view.add_source_reason.starts_with("Add a keyboard"));
+        assert!(missing_view.personas[0].note.starts_with("Add a keyboard"));
+
+        let device = staged_device("usb:1111:0001:00", "left", "Left keyboard");
+        let mut unavailable = staged_multi_source(vec![device], Vec::new());
+        unavailable.personas = missing.personas;
+        unavailable.reachable = false;
+        unavailable.error = Some("The staging service did not answer.".into());
+        let unavailable_view = RedesignControllers::of(&unavailable, None, None, None, None);
+        assert_eq!(unavailable_view.add_source_state, "unavailable");
+        assert_eq!(
+            unavailable_view.add_source_reason,
+            "The staging service did not answer."
+        );
+        assert_eq!(
+            unavailable_view.personas[0].note,
+            "The staging service did not answer."
+        );
+        assert!(!unavailable_view.personas[0].note.contains("Add a keyboard"));
+        assert!(unavailable_view.add_sources[0].disabled);
     }
 
     #[test]

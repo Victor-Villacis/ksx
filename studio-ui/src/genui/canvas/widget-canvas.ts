@@ -194,7 +194,7 @@ interface ViewportFrame {
   safeWidth: number;
 }
 
-type CameraFramingMode = "center" | "focus-item" | "focus-mode" | "navigate";
+type CameraFramingMode = "center" | "focus-item" | "focus-mode" | "navigate" | "reveal";
 
 type WidgetNavigationDirection = "left" | "right" | "up" | "down";
 
@@ -202,6 +202,9 @@ interface CameraFramingTarget {
   itemId: string;
   mode: CameraFramingMode;
   direction?: WidgetNavigationDirection;
+  element?: HTMLElement;
+  elementKey?: string;
+  margin?: number;
   viewportInsets?: WidgetCanvasViewportInsets;
 }
 
@@ -292,6 +295,8 @@ const CAMERA_ANIMATION_MS = 260;
 const FOCUS_CAMERA_ANIMATION_MS = 300;
 const PANEL_CAMERA_ANIMATION_MS = 200;
 const CAMERA_ANIMATION_LANDING_PAD_MS = 70;
+const CAMERA_FRAMING_MIN_RENDER_FRAMES = 2;
+const CAMERA_FRAMING_FRAME_RECHECK_MS = 50;
 const MIN_EFFECTIVE_SCALE = MIN_WIDGET_MANUAL_SCALE * DISTANCE_SCALE_MIN;
 const CAMERA_MOTION_SETTLE_MS = 120;
 const DEFAULT_VIRTUALIZATION_DWELL_MS = 2_000;
@@ -1184,8 +1189,25 @@ export class WidgetCanvas {
   revealElement(target: HTMLElement, margin = 18): boolean {
     const item = target.closest<HTMLElement>(".widget-instance");
     if (!item || this.#items.get(this.#itemId(item)) !== item) return false;
+    this.#preserveViewportCenter();
     this.#stopCameraAnimation();
     this.#renderCameraNow();
+    const changed = this.#applyRevealElementCamera(target, margin);
+    // Disclosures can settle one axis a frame after the other. Keep the
+    // exact control as the short-lived framing intent so a late viewport or
+    // widget measurement reveals it again instead of merely preserving the
+    // old viewport centre.
+    this.#animateCamera({
+      itemId: this.#itemId(item),
+      mode: "reveal",
+      element: target,
+      elementKey: target.dataset.widgetRevealKey,
+      margin,
+    }, 0);
+    return changed;
+  }
+
+  #applyRevealElementCamera(target: HTMLElement, margin: number): boolean {
     const viewport = this.#viewport.getBoundingClientRect();
     const frame = this.#safeViewportFrame(viewport);
     const inset = clamp(margin, 0, Math.min(frame.width, frame.height) / 4);
@@ -1205,14 +1227,13 @@ export class WidgetCanvas {
     if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5) return false;
     this.#camera.panX += deltaX;
     this.#camera.panY += deltaY;
-    this.#renderCameraNow();
-    this.#scheduleChange();
     return true;
   }
 
   toggleFocusMode(item: HTMLElement, options: WidgetCanvasFocusOptions = {}): boolean {
     const id = this.#itemId(item);
     if (!this.#items.has(id)) return false;
+    this.#preserveViewportCenter();
     if (this.#focusSession?.itemId === id) {
       this.#endFocusMode(true, true);
       return false;
@@ -1400,26 +1421,47 @@ export class WidgetCanvas {
     this.#scheduleChange();
   }
 
-  #retargetCameraFraming(): void {
+  #retargetCameraFraming(): boolean {
     const target = this.#cameraFramingTarget;
     // Keep the framing intent alive for the short landing window after the
     // CSS transition ends. Newly mounted runtimes can report their final
     // height a frame or two late; dropping the target at transitionend would
     // leave an arriving widget visibly off-centre by half that size delta.
-    if (!target) return;
+    if (!target) return false;
     const item = this.#items.get(target.itemId);
-    if (!item) return;
+    if (!item) {
+      this.#cameraFramingTarget = null;
+      return false;
+    }
     if (target.mode === "center") this.#applyCenterCamera(item);
     else if (target.mode === "focus-item") {
       this.#applyOneShotFocusCamera(item, target.viewportInsets);
     }
     else if (target.mode === "navigate") this.#applyNavigationReveal(item, target.direction);
+    else if (target.mode === "reveal") {
+      const element = target.element?.isConnected && item.contains(target.element)
+        ? target.element
+        : target.elementKey
+        ? Array.from(item.querySelectorAll<HTMLElement>("[data-widget-reveal-key]"))
+          .find((candidate) => candidate.dataset.widgetRevealKey === target.elementKey)
+        : null;
+      if (!element) {
+        this.#cameraFramingTarget = null;
+        return false;
+      }
+      target.element = element;
+      this.#applyRevealElementCamera(element, target.margin ?? 18);
+    }
     else {
       const session = this.#focusSession;
-      if (!session || session.itemId !== target.itemId) return;
+      if (!session || session.itemId !== target.itemId) {
+        this.#cameraFramingTarget = null;
+        return false;
+      }
       this.#applyFocusModeCamera(item, session);
     }
     this.#renderCameraNow();
+    return true;
   }
 
   #syncFocusPresentation(): void {
@@ -1443,6 +1485,7 @@ export class WidgetCanvas {
   #endFocusMode(restoreCamera: boolean, animate: boolean): boolean {
     const session = this.#focusSession;
     if (!session) return false;
+    this.#preserveViewportCenter();
     const focusedItem = this.#items.get(session.itemId) ?? null;
     this.#stopCameraAnimation();
     this.#focusSession = null;
@@ -1484,6 +1527,11 @@ export class WidgetCanvas {
    *  automatic move must not mint a history entry (it also un-hid the
    *  Back-view button in the served-vs-hydrated parity capture). */
   fitAll(pushHistory = true): void {
+    // A viewport resize and its ResizeObserver notification do not have to
+    // arrive in the same task. Consume any already-painted size change before
+    // recording history or calculating an explicit frame; otherwise a late
+    // resize callback applies the old centre delta to this NEW fitted camera.
+    this.#preserveViewportCenter();
     if (pushHistory) this.pushCameraHistory("before Fit workflow");
     this.#endFocusMode(false, false);
     const bounds = unionRects(Array.from(this.#items.values(), (item) => {
@@ -1532,6 +1580,7 @@ export class WidgetCanvas {
       this.fitAll();
       return;
     }
+    this.#preserveViewportCenter();
     this.pushCameraHistory("before Fit selection");
     this.#endFocusMode(false, false);
     const bounds = unionRects(selected.map((item) => {
@@ -1547,6 +1596,7 @@ export class WidgetCanvas {
   centerSelection(): void {
     const selected = this.selectedItems();
     if (selected.length === 0) return;
+    this.#preserveViewportCenter();
     this.pushCameraHistory("before Centre selection");
     const bounds = unionRects(selected.map((item) => {
       const state = this.getItemState(item);
@@ -1630,11 +1680,10 @@ export class WidgetCanvas {
       entry.panX += deltaX;
       entry.panY += deltaY;
     }
-    if (this.#cameraFramingTarget) {
+    if (this.#cameraFramingTarget && this.#retargetCameraFraming()) {
       // A named landing (new widget, Focus, keyboard reveal) owns the current
       // camera until it settles. Recompute that landing for the new frame;
       // translating it as an ordinary view would leave the target off-centre.
-      this.#retargetCameraFraming();
     } else {
       this.#stopCameraAnimation();
       this.#camera.panX += deltaX;
@@ -1967,8 +2016,12 @@ export class WidgetCanvas {
           return;
         }
         const host = this.#runtimeHosts.get(this.#itemId(item));
-        const opened = host?.focusFirstInteractive() === true ||
-          this.#onOpenActiveControls(item) === true;
+        // Give the owning surface first refusal. It may need to cross a
+        // semantic-zoom threshold or open containing chrome before a runtime
+        // control is genuinely usable; focusing the runtime first bypassed
+        // that preparation under forced-colors styles.
+        const opened = this.#onOpenActiveControls(item) === true ||
+          host?.focusFirstInteractive() === true;
         if (!opened) {
           this.#onKeyboardNavigation(
             `${item.dataset.widgetName ?? "Widget"} has no available interactive controls.`,
@@ -3058,6 +3111,10 @@ export class WidgetCanvas {
     clientY: number,
     animate = false,
   ): void {
+    // A ResizeObserver delivery can trail the layout that produced clientX/Y.
+    // Reconcile that layout first so its later callback cannot translate the
+    // camera a second time and undo this explicit zoom.
+    this.#preserveViewportCenter();
     this.#cameraFramingTarget = null;
     const rect = this.#viewport.getBoundingClientRect();
     const oldZoom = this.#camera.zoom;
@@ -3092,6 +3149,8 @@ export class WidgetCanvas {
         : CAMERA_ANIMATION_MS
     );
     this.#viewport.style.setProperty("--canvas-camera-duration", `${duration}ms`);
+    let framingRenderFrames = framingTarget ? 0 : CAMERA_FRAMING_MIN_RENDER_FRAMES;
+    let landingDeadlineReached = false;
 
     const releaseVisualMotion = (): void => {
       this.#viewport.classList.remove("is-camera-animating");
@@ -3110,6 +3169,45 @@ export class WidgetCanvas {
       releaseVisualMotion();
       this.#onCommit();
     };
+    const finishWhenLandingReady = (): void => {
+      if (
+        !framingTarget ||
+        this.#cameraFramingTarget !== framingTarget ||
+        this.#document.visibilityState !== "visible" ||
+        framingRenderFrames >= CAMERA_FRAMING_MIN_RENDER_FRAMES
+      ) {
+        finish();
+        return;
+      }
+      // A visible but blocked/slow renderer may let the wall-clock landing
+      // deadline elapse before ResizeObserver gets another delivery. Keep the
+      // semantic target alive until the required rendering opportunities run;
+      // a hidden document still takes the timer-only fallback above.
+      this.#animationTimer = this.#window.setTimeout(
+        finishWhenLandingReady,
+        CAMERA_FRAMING_FRAME_RECHECK_MS,
+      );
+    };
+    const reachLandingDeadline = (): void => {
+      landingDeadlineReached = true;
+      finishWhenLandingReady();
+    };
+    const countFramingRender = (): void => {
+      if (
+        this.#disposed ||
+        !framingTarget ||
+        this.#cameraFramingTarget !== framingTarget
+      ) return;
+      framingRenderFrames += 1;
+      if (framingRenderFrames < CAMERA_FRAMING_MIN_RENDER_FRAMES) {
+        this.#window.requestAnimationFrame(countFramingRender);
+      } else if (landingDeadlineReached) {
+        finishWhenLandingReady();
+      }
+    };
+    const beginFramingRenderContract = (): void => {
+      if (framingTarget) this.#window.requestAnimationFrame(countFramingRender);
+    };
 
     // The target camera is written before any visual tween. That is the
     // background-tab landing guarantee: even if the browser delivers no
@@ -3119,11 +3217,12 @@ export class WidgetCanvas {
     // measurements cannot change where the widget lands.
     if (reducedMotion) {
       this.#renderCameraNow();
+      beginFramingRenderContract();
       releaseVisualMotion();
       this.#scheduleChange();
       if (framingTarget) {
         this.#animationTimer = this.#window.setTimeout(
-          finish,
+          reachLandingDeadline,
           duration + CAMERA_ANIMATION_LANDING_PAD_MS,
         );
       } else {
@@ -3133,6 +3232,7 @@ export class WidgetCanvas {
     }
     this.#viewport.classList.add("is-camera-animating");
     this.#renderCameraNow();
+    beginFramingRenderContract();
     this.#animationEndListener = (event) => {
       if (event.target !== this.#stage || event.propertyName !== "transform") return;
       this.#stage.removeEventListener("transitionend", this.#animationEndListener!);
@@ -3147,7 +3247,7 @@ export class WidgetCanvas {
     // internal camera and inline transform are already exact; this fallback
     // releases transient interaction state even when rendering was throttled.
     this.#animationTimer = this.#window.setTimeout(
-      finish,
+      reachLandingDeadline,
       duration + CAMERA_ANIMATION_LANDING_PAD_MS,
     );
     this.#scheduleChange();

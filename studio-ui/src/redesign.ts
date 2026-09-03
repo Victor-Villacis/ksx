@@ -20,6 +20,7 @@ import {
   returnSharedPolicyEditor,
   redesignSelectedSlot,
   redesignSetLivePaths,
+  setRedesignChildModal,
   redesignWire,
   setRedesignRefreshHealth,
   setRedesignRefresh,
@@ -374,6 +375,14 @@ function wireForms(root: HTMLElement): void {
   root.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
+    if (
+      identifyIsPending(root) &&
+      target.closest("[data-rd-identify] > summary")
+    ) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
     const shellControl = target.closest<HTMLButtonElement>(
       '[data-nx="rd-dev-toggle"], [data-nx="rd-offline-remove"], [data-nx="rd-rescan"]',
     );
@@ -516,6 +525,7 @@ const MUTATION_SUBMIT_SELECTOR = [
     '[data-nx="rd-shared-policy"]',
     '[data-nx="rd-dev-toggle"]',
     '[data-nx="rd-offline-remove"]',
+    '[data-nx="rd-controller-add-source"]',
     '[data-nx="rd-rescan"]',
     '[data-nx="rd-refresh-retry"]',
     "[data-rd-live-retry]",
@@ -585,7 +595,20 @@ function endMutation(root: HTMLElement, controls: SubmitControl[]): void {
   new Set<SubmitControl>([...controls, ...currentControls]).forEach((control) => {
     const form = control.closest<HTMLFormElement>("form[data-rd-form]");
     const served = form ? redesignFormProductDisabled(form) : undefined;
-    control.disabled = served ?? control.dataset.rdProductDisabled === "true";
+    if (
+      control instanceof HTMLButtonElement && form &&
+      DISCOVERABLE_LIFECYCLE_ACTIONS.has(form.dataset.rdForm ?? "")
+    ) {
+      // The persistent lifecycle rail keeps unavailable actions reachable so
+      // keyboard and pointer users can ask why an action is unavailable. The
+      // page-wide mutation lock still uses the native disabled state while a
+      // request owns the island; restore the settled product state through
+      // aria-disabled once that transaction releases.
+      control.disabled = false;
+      control.setAttribute("aria-disabled", served === true ? "true" : "false");
+    } else {
+      control.disabled = served ?? control.dataset.rdProductDisabled === "true";
+    }
   });
   pendingMutationRoots.delete(root);
 }
@@ -753,6 +776,13 @@ function setIdentifyModalPending(root: HTMLElement, pending: boolean): void {
   if (!modal) return;
   if (pending) modal.dataset.rdIdentifyPending = "true";
   else delete modal.dataset.rdIdentifyPending;
+  const identify = identifySurface(root);
+  if (identify instanceof HTMLDetailsElement) {
+    if (pending) identify.open = true;
+    const summary = identify.querySelector<HTMLElement>(":scope > summary");
+    if (pending) summary?.setAttribute("aria-disabled", "true");
+    else summary?.removeAttribute("aria-disabled");
+  }
   modal.querySelectorAll<HTMLButtonElement>(
     '[data-nx="rd-dev-toggle"], [data-nx="rd-devs-close"], .rd-identify-start',
   ).forEach((button) => {
@@ -1614,6 +1644,20 @@ async function submitControllerForm(
   root: HTMLElement,
   submitter: HTMLElement | null,
 ): Promise<void> {
+  const controllerAddButton = form.matches('[data-rd-form="controller-add"]')
+    ? (submitter instanceof HTMLButtonElement
+      ? submitter
+      : form.querySelector<HTMLButtonElement>('button[type="submit"]'))
+    : null;
+  if (controllerAddButton?.getAttribute("aria-disabled") === "true") {
+    const label = controllerAddButton.querySelector<HTMLElement>(".n-dev-name")?.textContent
+      ?.trim() || "This controller";
+    const reason = controllerAddButton.querySelector<HTMLElement>(".rd-ctrl-note")?.textContent
+      ?.trim() || controllerAddButton.title.trim() || "It is not available on this system.";
+    rdAnnounce(`${label} is unavailable. ${reason}`);
+    controllerAddButton.focus({ preventScroll: true });
+    return;
+  }
   const sharedPolicy = form.matches('[data-rd-form="blocking"]');
   const submittedGhost =
     (form.elements.namedItem("ghost") as HTMLInputElement | null)?.value?.trim() ?? "";
@@ -1862,12 +1906,40 @@ type LifecycleFormKind =
   | "capture-prepare"
   | "capture-release";
 
+const DISCOVERABLE_LIFECYCLE_ACTIONS = new Set([
+  "save",
+  "play",
+  "play-replace",
+  "apply",
+  "stop",
+]);
+
 function lifecycleSubmitButton(
   form: HTMLFormElement,
   submitter: HTMLElement | null,
 ): HTMLButtonElement | null {
   if (submitter instanceof HTMLButtonElement) return submitter;
   return form.querySelector<HTMLButtonElement>('button[type="submit"]');
+}
+
+function lifecycleBlockedReason(
+  form: HTMLFormElement,
+  button: HTMLButtonElement | null,
+): string | null {
+  if (!DISCOVERABLE_LIFECYCLE_ACTIONS.has(form.dataset.rdForm ?? "")) return null;
+  if (
+    redesignFormProductDisabled(form) !== true &&
+    button?.getAttribute("aria-disabled") !== "true"
+  ) return null;
+
+  const describedBy = button?.getAttribute("aria-describedby")?.trim() ?? "";
+  const description = describedBy
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
+    .filter(Boolean)
+    .join(" ");
+  return description || button?.title.trim() || "This action is not available yet.";
 }
 
 /** Swap real child nodes, not generated CSS copy, so the visible label and
@@ -1969,6 +2041,15 @@ async function submitLifecycleForm(
 ): Promise<void> {
   const kind = form.dataset.rdForm as LifecycleFormKind | undefined;
   if (!kind) return;
+  const pendingButton = lifecycleSubmitButton(form, submitter);
+  const blockedReason = lifecycleBlockedReason(form, pendingButton);
+  if (blockedReason) {
+    const label = pendingButton?.querySelector<HTMLElement>(".rd-action-label")?.textContent
+      ?.trim() || pendingButton?.textContent?.trim() || "Action";
+    rdAnnounce(`${label}: ${blockedReason}`);
+    pendingButton?.focus({ preventScroll: true });
+    return;
+  }
   const activeAtStart = document.activeElement;
   const startedWithFocus = activeAtStart === submitter || Boolean(activeAtStart && form.contains(activeAtStart));
   const requestedRevision = form.querySelector<HTMLInputElement>('input[name="expected_revision"]')
@@ -1986,7 +2067,6 @@ async function submitLifecycleForm(
     : "";
   const submits = beginMutation(root);
   if (!submits) return;
-  const pendingButton = lifecycleSubmitButton(form, submitter);
   setLifecyclePending(pendingButton, true);
   let actionSucceeded = false;
   let refreshed = false;
@@ -2160,9 +2240,10 @@ activateIslands({
       controlsFor: redesignControlsFor,
       beginMutation: () => beginMutation(el),
       endMutation: (token) => endMutation(el, token as never),
+      childModal: setRedesignChildModal,
     });
     // The macro step editor (its dialog, draft, and save) — same ports.
-    macWire({ root: () => el, refresh });
+    macWire({ root: () => el, refresh, childModal: setRedesignChildModal });
     startBackgroundPoll(el);
     redesignWire(el);
     wireForms(el);

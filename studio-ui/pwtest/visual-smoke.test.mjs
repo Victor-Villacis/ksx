@@ -1216,8 +1216,16 @@ describe("redesign canvas interaction chrome", () => {
       await page.getByRole("spinbutton", { name: "X", exact: true }).focus();
       await page.keyboard.press("Escape");
       assert.equal(await stageItem(CTRL_B).getAttribute("aria-current"), "true");
-      assert.equal(await page.locator(".rd-inspector").getAttribute("hidden"), null);
-      await page.locator('[data-nx="rd-insp-close"]').click();
+      assert.equal(
+        await page.locator(".rd-inspector").getAttribute("hidden"),
+        "",
+        "Escape did not dismiss the full-screen mobile Inspector",
+      );
+      assert.equal(
+        await stageItem(CTRL_B).evaluate((item) => item === document.activeElement),
+        true,
+        "dismissing the mobile Inspector did not restore focus to its controller",
+      );
 
       await page.keyboard.press("?");
       const mobileSheetFocus = await page.locator(".rd-sheet-lede").evaluate((lede) => {

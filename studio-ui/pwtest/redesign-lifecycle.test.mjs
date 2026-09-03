@@ -141,7 +141,8 @@ async function applyButtonIsReady(page) {
   return page.locator('[data-rd-form="apply"]').evaluateAll((forms) =>
     forms.some((form) => {
       const button = form.querySelector("button");
-      return !form.classList.contains("none") && button && !button.disabled;
+      return !form.classList.contains("none") && button && !button.disabled &&
+        button.getAttribute("aria-disabled") === "false";
     }),
   );
 }
@@ -192,12 +193,17 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
     await page.waitForFunction(
       () => document.querySelector("[data-forma-island]")?.dataset.rdLiveState === "inactive",
     );
-    const blockedGuidance = page.locator(".rd-action-guidance");
-    assert.equal(await blockedGuidance.isVisible(), true);
+    assert.equal(
+      await page.locator(".rd-action-guidance").count(),
+      0,
+      "blocked guidance must not float over the workbench",
+    );
+    const blockedPlay = page.locator('[data-rd-form="play"] button:visible').first();
+    assert.equal(await blockedPlay.getAttribute("aria-disabled"), "true");
     assert.match(
-      (await blockedGuidance.textContent()) ?? "",
-      /(?:Save|Play).*(?:Prepare|input)/i,
-      "the header visibly explains how to unblock its native-disabled actions",
+      (await blockedPlay.getAttribute("aria-describedby")) ?? "",
+      /rd-play-reason/,
+      "the reachable action owns its prerequisite description",
     );
 
     // A stopped exact-device session deliberately fails closed until the
@@ -209,7 +215,8 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
     await prepare.locator('button[type="submit"]').click();
     await page.waitForFunction(
       () => Array.from(document.querySelectorAll('[data-rd-form="play"] button')).some(
-        (button) => !button.disabled && button.offsetParent !== null,
+        (button) => !button.disabled && button.getAttribute("aria-disabled") === "false" &&
+          button.offsetParent !== null,
       ),
       null,
       { timeout: 20_000 },
@@ -244,7 +251,8 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
       () => {
         const form = document.querySelector('[data-rd-form="apply"]');
         const button = form?.querySelector("button");
-        return form && !form.classList.contains("none") && button && !button.disabled;
+        return form && !form.classList.contains("none") && button && !button.disabled &&
+          button.getAttribute("aria-disabled") === "false";
       },
       null,
       { timeout: 20_000 },
@@ -274,7 +282,8 @@ describe("redesign lifecycle shell", { concurrency: false }, () => {
       () => {
         const form = document.querySelector('[data-rd-form="apply"]');
         const button = form?.querySelector("button");
-        return form && !form.classList.contains("none") && button && !button.disabled;
+        return form && !form.classList.contains("none") && button && !button.disabled &&
+          button.getAttribute("aria-disabled") === "false";
       },
       null,
       { timeout: 20_000 },

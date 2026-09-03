@@ -6215,9 +6215,24 @@ describe("the device workbench", () => {
         null,
         { timeout: 20_000 },
       );
+      await page.waitForFunction(
+        () => Boolean(document.querySelector(".forma-canvas-stage")?.style.transform),
+        null,
+        { timeout: 20_000 },
+      );
       await toggleEncoderResearchHarness(page);
       const node = page.locator(".rd-encoder-profile-node");
       await node.focus();
+      // At phone width, selecting a widget intentionally opens the modal
+      // Inspector and moves focus to its close button. Dismiss that layer to
+      // return to the widget proxy before testing its F2 editing path.
+      await page.waitForFunction(
+        () => document.activeElement?.matches('[data-nx="rd-insp-close"]') === true,
+      );
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(
+        () => document.activeElement?.matches(".rd-encoder-profile-node") === true,
+      );
       await node.press("F2");
       await page.waitForFunction(
         () => document.querySelector(".forma-canvas-viewport")?.dataset.canvasZoomTier ===

@@ -661,7 +661,7 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
       serveExternalSession = true;
       await page.waitForFunction(
         () => document.querySelector(".rd-profile-session")?.textContent?.includes("Playing") &&
-          document.querySelector('[data-rd-form="stop"] button:not([disabled])')
+          document.querySelector('[data-rd-form="stop"] button[aria-disabled="false"]:not([disabled])')
             ?.textContent?.includes("Stop external Play"),
         null,
         { timeout: 7_000 },
@@ -1552,6 +1552,10 @@ describe("redesign truth, recovery and pending feedback", { concurrency: false }
     await makeDraftDirty(page);
     await page.locator('[data-rd-form="save"] button:visible').waitFor({ state: "visible" });
     assert.equal(await page.locator('[data-rd-form="save"] button:visible').isDisabled(), false);
+    assert.equal(
+      await page.locator('[data-rd-form="save"] button:visible').getAttribute("aria-disabled"),
+      "false",
+    );
     await delayedLifecycle(page, {
       path: "/redesign/save",
       formKind: "save",

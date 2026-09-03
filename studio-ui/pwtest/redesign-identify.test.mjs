@@ -143,6 +143,24 @@ async function openRedesign(base) {
   return page;
 }
 
+async function revealIdentifyAction(page) {
+  const disclosure = page.locator("[data-rd-identify]");
+  if ((await disclosure.getAttribute("open")) === null) {
+    await disclosure.locator(":scope > summary").click();
+  }
+  assert.equal(
+    await disclosure.getAttribute("open"),
+    "",
+    "the identify disclosure did not open",
+  );
+  const action = disclosure.getByRole("button", {
+    name: "Identify exact device",
+    exact: true,
+  });
+  assert.equal(await action.isVisible(), true, "the identify action is not visible");
+  return action;
+}
+
 before(async () => {
   for (const base of [BASE, HOLD_BASE]) {
     const occupied = await fetch(`${base}/api/redesign`).then(
@@ -228,10 +246,7 @@ describe("redesign identify by key", () => {
         ["USB D209:0430 · connection 00", "USB D209:0430 · connection 01"],
         "true twin boards keep distinct connection labels beside the shared name",
       );
-      const action = page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      });
+      const action = await revealIdentifyAction(page);
       assert.match(
         (await page.locator("[data-rd-identify] .rd-identify-copy").textContent()) ?? "",
         /successful answer adds that exact connection as an independent source.*nothing is captured, saved, or started/is,
@@ -277,10 +292,7 @@ describe("redesign identify by key", () => {
         route.fulfill({ status: 503, body: "fixture refusal" })
       );
       await page.click('[data-nx="rd-devs-open"]');
-      const action = page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      });
+      const action = await revealIdentifyAction(page);
       await action.click();
       const status = page.locator('[data-rd-identify-status][data-state="error"]');
       await status.waitFor();
@@ -312,10 +324,7 @@ describe("redesign identify by key", () => {
         await route.abort("connectionclosed");
       });
       await page.click('[data-nx="rd-devs-open"]');
-      await page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      }).click();
+      await (await revealIdentifyAction(page)).click();
 
       const status = page.locator('[data-rd-identify-status][data-state="error"]');
       await status.waitFor({ timeout: 15_000 });
@@ -378,10 +387,7 @@ describe("redesign identify by key", () => {
       });
 
       await page.click('[data-nx="rd-devs-open"]');
-      const action = page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      });
+      const action = await revealIdentifyAction(page);
       await action.click();
       await within(
         refreshStarted,
@@ -469,10 +475,7 @@ describe("redesign identify by key", () => {
       });
 
       await page.click('[data-nx="rd-devs-open"]');
-      await page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      }).click();
+      await (await revealIdentifyAction(page)).click();
       await within(
         refreshStarted,
         15_000,
@@ -558,13 +561,20 @@ describe("redesign identify by key", () => {
     try {
       await page.emulateMedia({ reducedMotion: "reduce" });
       await page.click('[data-nx="rd-devs-open"]');
-      const action = page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      });
+      const action = await revealIdentifyAction(page);
       await action.click();
       const pending = page.locator('[data-rd-identify-status][data-state="listening"]');
       await pending.waitFor();
+      const disclosure = page.locator("[data-rd-identify]");
+      const disclosureSummary = disclosure.locator(":scope > summary");
+      assert.equal(await disclosure.getAttribute("open"), "");
+      assert.equal(await disclosureSummary.getAttribute("aria-disabled"), "true");
+      await disclosureSummary.dispatchEvent("click");
+      assert.equal(
+        await disclosure.getAttribute("open"),
+        "",
+        "the in-flight identify instructions collapsed around the listener",
+      );
       assert.equal(
         await pending.evaluate((status) => status === document.activeElement),
         true,
@@ -610,6 +620,7 @@ describe("redesign identify by key", () => {
       const cancelled = page.locator('[data-rd-identify-status][data-state="cancelled"]');
       await cancelled.waitFor({ timeout: 15_000 });
       assert.match((await cancelled.textContent()) ?? "", /cancelled.*Nothing changed/is);
+      assert.equal(await disclosureSummary.getAttribute("aria-disabled"), null);
       assert.equal(await page.locator(".rd-devmodal[hidden]").count(), 0);
       assert.equal(await action.evaluate((button) => button === document.activeElement), true);
       const payload = await fetch(`${HOLD_BASE}/api/redesign`).then((response) => response.json());
@@ -654,10 +665,7 @@ describe("redesign identify by key", () => {
       });
 
       await page.click('[data-nx="rd-devs-open"]');
-      const action = page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      });
+      const action = await revealIdentifyAction(page);
       await action.click();
       await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
       await page.keyboard.press("Escape");
@@ -708,10 +716,7 @@ describe("redesign identify by key", () => {
       const lifecycleBaseline = await lifecycleFenceSnapshot(page);
       assert.ok(lifecycleBaseline.length > 0, "the fixture exposed no Save or Play action");
       await page.click('[data-nx="rd-devs-open"]');
-      await page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      }).click();
+      await (await revealIdentifyAction(page)).click();
       await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
 
       const firstGeneration = await waitForListeningGeneration(HOLD_BASE);
@@ -799,10 +804,7 @@ describe("redesign identify by key", () => {
         "hydration cleanup did not fence every Save and Play action",
       );
       await page.click('[data-nx="rd-devs-open"]');
-      const retry = page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      });
+      const retry = await revealIdentifyAction(page);
       const deviceToggle = page.locator('[data-nx="rd-dev-toggle"]').first();
       assert.equal(
         await retry.isDisabled(),
@@ -912,10 +914,7 @@ describe("redesign identify by key", () => {
       const lifecycleBaseline = await lifecycleFenceSnapshot(page);
       assert.ok(lifecycleBaseline.length > 0, "the fixture exposed no Save or Play action");
       await page.click('[data-nx="rd-devs-open"]');
-      await page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      }).click();
+      await (await revealIdentifyAction(page)).click();
       await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
       const firstGeneration = await waitForListeningGeneration(HOLD_BASE);
       await page.evaluate(() => {
@@ -966,10 +965,7 @@ describe("redesign identify by key", () => {
       );
       await within(cleanupSeen, 15_000, "the foreground cleanup was never attempted");
       await page.click('[data-nx="rd-devs-open"]');
-      const retry = page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      });
+      const retry = await revealIdentifyAction(page);
       assert.equal(await retry.isDisabled(), true);
       assert.equal(await page.locator('[data-nx="rd-rescan"]').isDisabled(), true);
       assert.ok(
@@ -1072,10 +1068,7 @@ describe("redesign identify by key", () => {
       const lifecycleBaseline = await lifecycleFenceSnapshot(page);
       assert.ok(lifecycleBaseline.length > 0, "the fixture exposed no Save or Play action");
       await page.click('[data-nx="rd-devs-open"]');
-      await page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      }).click();
+      await (await revealIdentifyAction(page)).click();
       await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
       const firstGeneration = await waitForListeningGeneration(HOLD_BASE);
       await page.evaluate(() => {
@@ -1169,10 +1162,7 @@ describe("redesign identify by key", () => {
         (await lifecycleFenceSnapshot(page)).every((action) => action.disabled),
         "BFCache retry did not fence every Save and Play action",
       );
-      const retry = page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      });
+      const retry = await revealIdentifyAction(page);
       assert.equal(await retry.isDisabled(), true);
       assert.equal(await page.locator('[data-nx="rd-dev-toggle"]').first().isDisabled(), true);
       assert.equal(starts.length, 0, "BFCache cleanup opened a listener without user intent");
@@ -1208,10 +1198,7 @@ describe("redesign identify by key", () => {
     let releaseRecovery;
     try {
       await page.click('[data-nx="rd-devs-open"]');
-      const action = page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      });
+      const action = await revealIdentifyAction(page);
       await action.click();
       await page.locator('[data-rd-identify-status][data-state="listening"]').waitFor();
       await waitForListeningGeneration(HOLD_BASE);
@@ -1306,10 +1293,7 @@ describe("redesign identify by key", () => {
         }
       });
       await page.click('[data-nx="rd-devs-open"]');
-      await page.getByRole("button", {
-        name: "Identify exact device",
-        exact: true,
-      }).click();
+      await (await revealIdentifyAction(page)).click();
       await page.locator('[data-rd-identify-status][data-state="identified"]').waitFor({
         timeout: 15_000,
       });

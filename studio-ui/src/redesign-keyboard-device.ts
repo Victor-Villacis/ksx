@@ -335,7 +335,10 @@ function createTrayKey(
   key.type = "button";
   key.className = "n-key tray";
   key.dataset.key = keyName;
-  key.tabIndex = 0;
+  // The board is one composite Tab stop. `syncKeyboardRovingFocus` chooses
+  // the current key after the whole plate (including this dynamic tray) has
+  // been reconciled.
+  key.tabIndex = -1;
   const cap = document.createElement("span");
   cap.className = "n-key-cap";
   cap.textContent = keyName;
@@ -346,6 +349,164 @@ function createTrayKey(
   return key;
 }
 
+const KEYBOARD_KEY_SELECTOR =
+  ".n-kbcase button[data-key], .n-kbtray-row button[data-key]";
+const KEYBOARD_ROW_SELECTOR = ".n-kbrow, .n-kbtray-row";
+
+function keyboardKeyIsAvailable(key: HTMLButtonElement): boolean {
+  return !key.disabled && key.getAttribute("aria-hidden") !== "true" &&
+    !key.closest("[hidden], [inert]");
+}
+
+function keyboardRovingKeys(surface: HTMLElement): HTMLButtonElement[] {
+  return Array.from(
+    surface.querySelectorAll<HTMLButtonElement>(KEYBOARD_KEY_SELECTOR),
+  ).filter(keyboardKeyIsAvailable);
+}
+
+function keyboardRowKeys(
+  surface: HTMLElement,
+  row: Element | null,
+): HTMLButtonElement[] {
+  if (!row) return [];
+  return Array.from(row.querySelectorAll<HTMLButtonElement>("button[data-key]"))
+    .filter((key) => surface.contains(key) && keyboardKeyIsAvailable(key));
+}
+
+function keyboardHorizontalCenter(key: HTMLButtonElement): number | null {
+  const rect = key.getBoundingClientRect();
+  return rect.width > 0 ? rect.left + rect.width / 2 : null;
+}
+
+function keyboardVerticalTarget(
+  surface: HTMLElement,
+  current: HTMLButtonElement,
+  direction: -1 | 1,
+): HTMLButtonElement | null {
+  const rows = Array.from(surface.querySelectorAll<HTMLElement>(KEYBOARD_ROW_SELECTOR))
+    .filter((row) => keyboardRowKeys(surface, row).length > 0);
+  const currentRow = current.closest(KEYBOARD_ROW_SELECTOR);
+  const rowIndex = rows.findIndex((row) => row === currentRow);
+  if (rowIndex < 0) return null;
+
+  const currentRowKeys = keyboardRowKeys(surface, currentRow);
+  const currentIndex = Math.max(0, currentRowKeys.indexOf(current));
+  const currentCenter = keyboardHorizontalCenter(current);
+  for (
+    let candidateRowIndex = rowIndex + direction;
+    candidateRowIndex >= 0 && candidateRowIndex < rows.length;
+    candidateRowIndex += direction
+  ) {
+    const candidates = keyboardRowKeys(surface, rows[candidateRowIndex]);
+    if (candidates.length === 0) continue;
+    if (currentCenter === null) {
+      return candidates[Math.min(currentIndex, candidates.length - 1)] ?? null;
+    }
+    return candidates.reduce((nearest, candidate) => {
+      const nearestCenter = keyboardHorizontalCenter(nearest);
+      const candidateCenter = keyboardHorizontalCenter(candidate);
+      if (candidateCenter === null) return nearest;
+      if (nearestCenter === null) return candidate;
+      return Math.abs(candidateCenter - currentCenter) < Math.abs(nearestCenter - currentCenter)
+        ? candidate
+        : nearest;
+    });
+  }
+  return null;
+}
+
+function setKeyboardRovingTarget(
+  surface: HTMLElement,
+  requested: HTMLButtonElement | null,
+  moveFocus: boolean,
+): void {
+  const keys = keyboardRovingKeys(surface);
+  const target = requested && keys.includes(requested) ? requested : keys[0] ?? null;
+  for (const key of keys) key.tabIndex = key === target ? 0 : -1;
+  if (!target) {
+    delete surface.dataset.keyboardRovingKey;
+    return;
+  }
+  surface.dataset.keyboardRovingKey = target.dataset.key ?? "";
+  if (moveFocus) target.focus({ preventScroll: true });
+}
+
+function installKeyboardRovingFocus(surface: HTMLElement): void {
+  if (surface.dataset.keyboardRoving === "true") return;
+  surface.dataset.keyboardRoving = "true";
+  surface.addEventListener("focusin", (event) => {
+    const target = event.target instanceof Element
+      ? event.target.closest<HTMLButtonElement>(KEYBOARD_KEY_SELECTOR)
+      : null;
+    if (target && surface.contains(target)) setKeyboardRovingTarget(surface, target, false);
+  });
+  surface.addEventListener("keydown", (event) => {
+    const current = event.target instanceof Element
+      ? event.target.closest<HTMLButtonElement>(KEYBOARD_KEY_SELECTOR)
+      : null;
+    if (!current || !surface.contains(current) || event.altKey || event.metaKey) return;
+
+    const row = current.closest(KEYBOARD_ROW_SELECTOR);
+    const rowKeys = keyboardRowKeys(surface, row);
+    const rowIndex = rowKeys.indexOf(current);
+    let target: HTMLButtonElement | null = null;
+    switch (event.key) {
+      case "ArrowLeft":
+        if (!event.ctrlKey) target = rowKeys[rowIndex - 1] ?? null;
+        break;
+      case "ArrowRight":
+        if (!event.ctrlKey) target = rowKeys[rowIndex + 1] ?? null;
+        break;
+      case "ArrowUp":
+        if (!event.ctrlKey) target = keyboardVerticalTarget(surface, current, -1);
+        break;
+      case "ArrowDown":
+        if (!event.ctrlKey) target = keyboardVerticalTarget(surface, current, 1);
+        break;
+      case "Home": {
+        const keys = event.ctrlKey ? keyboardRovingKeys(surface) : rowKeys;
+        target = keys[0] ?? null;
+        break;
+      }
+      case "End": {
+        const keys = event.ctrlKey ? keyboardRovingKeys(surface) : rowKeys;
+        target = keys.at(-1) ?? null;
+        break;
+      }
+      default:
+        return;
+    }
+    // Arrow keys belong to the keyboard composite even at an edge. Letting
+    // an unhandled edge press bubble would move the entire canvas widget.
+    event.preventDefault();
+    event.stopPropagation();
+    if (target) setKeyboardRovingTarget(surface, target, true);
+  });
+}
+
+function syncKeyboardRovingFocus(
+  surface: HTMLElement,
+  preferredKey = "",
+  restoreFocus = false,
+): void {
+  installKeyboardRovingFocus(surface);
+  const keys = keyboardRovingKeys(surface);
+  const active = surface.ownerDocument.activeElement;
+  const activeKey = active instanceof HTMLButtonElement && keys.includes(active)
+    ? active
+    : null;
+  const wantedKey = preferredKey || surface.dataset.keyboardRovingKey || "";
+  const remembered = wantedKey
+    ? keys.find((key) => key.dataset.key === wantedKey) ?? null
+    : null;
+  const existing = keys.find((key) => key.tabIndex === 0) ?? null;
+  setKeyboardRovingTarget(surface, activeKey ?? remembered ?? existing, false);
+  if (restoreFocus) {
+    const target = remembered ?? activeKey ?? existing ?? keys[0] ?? null;
+    if (target) setKeyboardRovingTarget(surface, target, true);
+  }
+}
+
 /** Paint one persistent board from only that physical source's routes. This is
  * deliberately separate from inspector focus: all controller owners remain
  * visible and live while one slot supplies the cap's short label. */
@@ -353,6 +514,12 @@ export function syncKeyboardSourceMapping(
   surface: HTMLElement,
   projection: KeyboardSourceMappingProjection,
 ): void {
+  const active = surface.ownerDocument.activeElement;
+  const focusedKey = active instanceof HTMLButtonElement && surface.contains(active) &&
+      active.matches(KEYBOARD_KEY_SELECTOR)
+    ? active
+    : null;
+  const focusedKeyName = focusedKey?.dataset.key ?? "";
   const paint = mappingPaint(projection);
   syncSourceLegend(surface, projection, paint);
   const plateKeys = Array.from(
@@ -379,6 +546,11 @@ export function syncKeyboardSourceMapping(
     tray.hidden = offBoard.length === 0;
     tray.classList.toggle("none", offBoard.length === 0);
   }
+  syncKeyboardRovingFocus(
+    surface,
+    focusedKeyName,
+    Boolean(focusedKey && !focusedKey.isConnected),
+  );
 }
 
 /** Create one independent surface. It is cloned once and remains owned by the
@@ -407,6 +579,7 @@ export function syncKeyboardSurfaceInstance(
   surface.dataset.mappingAvailable = options.mappingAvailable ? "true" : "false";
   surface.setAttribute("role", "region");
   surface.setAttribute("aria-label", `${options.sourceLabel} keyboard`);
+  surface.setAttribute("aria-description", "Use arrow keys to move between keyboard keys.");
   const title = surface.querySelector<HTMLElement>(".n-kbhead > .n-kick");
   if (title) title.textContent = options.sourceLabel;
   syncKeyboardRows(surface, template, options);
@@ -436,4 +609,5 @@ export function syncKeyboardSurfaceInstance(
     if (colors) colors.hidden = true;
     surface.querySelector<HTMLElement>(".rd-keycue")?.classList.add("none");
   }
+  syncKeyboardRovingFocus(surface);
 }

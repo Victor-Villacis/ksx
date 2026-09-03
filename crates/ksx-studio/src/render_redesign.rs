@@ -13,11 +13,11 @@ use forma_ir::slot::{SlotData, SlotValue};
 use forma_server::{render_page, PageConfig, PageOutput, RenderMode};
 
 use crate::render::{body_prefix_no_refresh, with_icon_links, EmbeddedPage, PERSONALITY_CSS};
-use crate::render_workbench::{device_row, mode_row, named_slot_ids, other_row};
+use crate::render_workbench::{device_row, named_slot_ids, other_row};
 use crate::snapshot::{
     compose_board_panel_for_source, selected_source_view, theme_rows, NocturneChoiceRow,
-    RedesignCaptureState, RedesignControllers, RedesignDeviceRows, RedesignOperationalState,
-    RedesignPayload, RedesignPersonaRow, SetupSnapshot, StartCaptureView,
+    RedesignCaptureState, RedesignControllerSourceRow, RedesignControllers, RedesignDeviceRows,
+    RedesignOperationalState, RedesignPayload, RedesignPersonaRow, SetupSnapshot, StartCaptureView,
 };
 
 /// The island table this page compiles to: exactly one island — the whole
@@ -375,6 +375,7 @@ const LIST_SLOT_DEV_KB: &str = "list:rdDevKb:array";
 const LIST_SLOT_DEV_ENC: &str = "list:rdDevEnc:array";
 const LIST_SLOT_DEV_EXP: &str = "list:rdDevExp:array";
 const LIST_SLOT_DEV_OTHER: &str = "list:rdDevOther:array";
+const LIST_SLOT_CTRL_ADD_SOURCES: &str = "list:rdCtrlAddSources:array";
 // The keyboard widget's served lists: the six plate rows, the off-board
 // tray, the legend and the board-picker roster (the nocturne plate's own
 // slot shapes).
@@ -437,6 +438,18 @@ fn capture_choice_rows(rows: &[NocturneChoiceRow]) -> Vec<SlotValue> {
     rows.iter().map(|row| board_choice_row(row, "0")).collect()
 }
 
+/// Theme choices already have complete keyboard behavior in the native
+/// disclosure, so their server paint can use the same one-stop radio model
+/// that the island renders during adoption. If no stored theme is selected,
+/// the first row is the entry stop without being falsely marked checked.
+fn theme_choice_rows(rows: &[NocturneChoiceRow]) -> Vec<SlotValue> {
+    let chosen = rows.iter().position(|row| row.chosen).unwrap_or(0);
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| board_choice_row(row, if index == chosen { "0" } else { "-1" }))
+        .collect()
+}
+
 fn held_capture_row(row: &crate::snapshot::RedesignHeldCaptureRow) -> SlotValue {
     SlotValue::object(vec![
         ("key".to_owned(), SlotValue::Text(row.key.clone())),
@@ -464,32 +477,59 @@ fn held_capture_row(row: &crate::snapshot::RedesignHeldCaptureRow) -> SlotValue 
 const LIST_SLOT_CTRL_PERSONAS: &str = "list:rdCtrlPersonas:array";
 
 /// The persona-row serializer — every field, spelled once.
-fn ctrl_persona_row(row: &RedesignPersonaRow) -> SlotValue {
+fn ctrl_persona_row(
+    row: &RedesignPersonaRow,
+    source_ready: bool,
+    source_reason: &str,
+) -> SlotValue {
+    let usable = row.usable == "true" && source_ready;
+    let note = if source_ready {
+        row.note.clone()
+    } else {
+        source_reason.to_owned()
+    };
+    let cls = if usable || row.cls.split_whitespace().any(|part| part == "off") {
+        row.cls.clone()
+    } else {
+        format!("{} off", row.cls.trim())
+    };
     SlotValue::object(vec![
         ("name".to_owned(), SlotValue::Text(row.name.clone())),
         ("label".to_owned(), SlotValue::Text(row.label.clone())),
         ("api".to_owned(), SlotValue::Text(row.api.clone())),
-        ("note".to_owned(), SlotValue::Text(row.note.clone())),
-        ("cls".to_owned(), SlotValue::Text(row.cls.clone())),
-        ("usable".to_owned(), SlotValue::Text(row.usable.clone())),
+        ("note".to_owned(), SlotValue::Text(note)),
+        ("cls".to_owned(), SlotValue::Text(cls)),
+        (
+            "usable".to_owned(),
+            SlotValue::Text(if usable { "true" } else { "false" }.to_owned()),
+        ),
+        (
+            "aria_disabled".to_owned(),
+            SlotValue::Text(if usable { "false" } else { "true" }.to_owned()),
+        ),
+        (
+            "action_label".to_owned(),
+            SlotValue::Text(if usable { "Add" } else { "Unavailable" }.to_owned()),
+        ),
+        (
+            "reason_id".to_owned(),
+            SlotValue::Text(format!("rd-persona-reason-{}", row.name)),
+        ),
     ])
 }
 
-fn lifecycle_guidance(operations: &RedesignOperationalState) -> String {
-    [
-        ("Save", &operations.save, true),
-        (
-            "Play",
-            &operations.play,
-            operations.play.visible || operations.session.running,
-        ),
-        ("Apply", &operations.apply, operations.apply.visible),
-        ("Stop", &operations.stop, operations.stop.visible),
-    ]
-    .into_iter()
-    .find(|(_, action, visible)| *visible && !action.allowed && !action.reason.trim().is_empty())
-    .map(|(label, action, _)| format!("{label}: {}", action.reason.trim()))
-    .unwrap_or_default()
+/// One source option in Add Controller. It comes from the durable staged
+/// roster, not the best-effort connection scan, so a refused scan cannot make
+/// a valid mapping source disappear. Raw selectors remain values, never
+/// presentation copy.
+fn ctrl_add_source_row(row: &RedesignControllerSourceRow) -> SlotValue {
+    SlotValue::object(vec![
+        ("selector".to_owned(), SlotValue::Text(row.selector.clone())),
+        ("revision".to_owned(), SlotValue::Text(row.revision.clone())),
+        ("label".to_owned(), SlotValue::Text(row.label.clone())),
+        ("selected".to_owned(), SlotValue::Bool(row.selected)),
+        ("disabled".to_owned(), SlotValue::Bool(row.disabled)),
+    ])
 }
 
 /// Scalar slot values, keyed by the signal names in RedesignIsland.ts.
@@ -551,6 +591,7 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         "rdCtrlCountsLine": payload.controllers.counts_line,
         "rdCtrlAddPreset": payload.controllers.add_preset,
         "rdCtrlAddLayout": payload.controllers.add_layout,
+        "rdCtrlAddLayoutLabel": payload.controllers.add_layout_label,
         "rdCtrlAddSource": payload.controllers.add_source,
         "rdCtrlAddSourceRevision": payload.controllers.add_source_revision,
         // The macro dialog is edited client-side after adoption, but an open
@@ -597,20 +638,19 @@ fn scalar_slots(payload: &RedesignPayload, flash: Option<&str>) -> serde_json::V
         },
         "rdOpEscapeLine": payload.operations.escape_line,
         "rdSaveLabel": payload.operations.save.label,
-        "rdSaveDisabled": !payload.operations.save.allowed,
+        "rdSaveDisabled": if payload.operations.save.allowed { "false" } else { "true" },
         "rdSaveReason": payload.operations.save.reason,
-        "rdActionGuidance": lifecycle_guidance(&payload.operations),
         "rdPlayLabel": payload.operations.play.label,
-        "rdPlayDisabled": !payload.operations.play.allowed,
+        "rdPlayDisabled": if payload.operations.play.allowed { "false" } else { "true" },
         "rdPlayReason": payload.operations.play.reason,
         "rdPlayCls": if payload.operations.play.visible { "rd-runform rd-playform" } else { "rd-runform rd-playform none" },
         "rdReplacePlayCls": if payload.operations.session.running { "rd-runform rd-replaceform" } else { "rd-runform rd-replaceform none" },
         "rdApplyLabel": payload.operations.apply.label,
-        "rdApplyDisabled": !payload.operations.apply.allowed,
+        "rdApplyDisabled": if payload.operations.apply.allowed { "false" } else { "true" },
         "rdApplyReason": payload.operations.apply.reason,
         "rdApplyCls": if payload.operations.apply.visible { "rd-runform rd-applyform" } else { "rd-runform rd-applyform none" },
         "rdStopLabel": payload.operations.stop.label,
-        "rdStopDisabled": !payload.operations.stop.allowed,
+        "rdStopDisabled": if payload.operations.stop.allowed { "false" } else { "true" },
         "rdStopReason": payload.operations.stop.reason,
         "rdStopCls": if payload.operations.stop.visible { "rd-runform rd-stopform" } else { "rd-runform rd-stopform none" },
         "rdAdoptLabel": payload.operations.adopt.label,
@@ -647,10 +687,7 @@ fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>
         .into_iter()
         .next()
     {
-        slots.set(
-            id,
-            SlotValue::array(payload.theme_rows.iter().map(mode_row).collect()),
-        );
+        slots.set(id, SlotValue::array(theme_choice_rows(&payload.theme_rows)));
     }
     let dev = &payload.devices;
     for (name, value) in [
@@ -679,6 +716,14 @@ fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>
         .into_iter()
         .next()
     {
+        let source_ready = payload.controllers.add_source_state == "ready"
+            && !payload.controllers.add_source.trim().is_empty()
+            && !payload.controllers.add_source_revision.trim().is_empty();
+        let source_reason = if payload.controllers.add_source_reason.trim().is_empty() {
+            "Add a keyboard or encoder to the canvas before adding a controller."
+        } else {
+            payload.controllers.add_source_reason.as_str()
+        };
         slots.set(
             id,
             SlotValue::array(
@@ -686,10 +731,22 @@ fn build_slots(module: &IrModule, payload: &RedesignPayload, flash: Option<&str>
                     .controllers
                     .personas
                     .iter()
-                    .map(ctrl_persona_row)
+                    .map(|row| ctrl_persona_row(row, source_ready, source_reason))
                     .collect(),
             ),
         );
+    }
+    if let Some(id) = named_slot_ids(module, LIST_SLOT_CTRL_ADD_SOURCES)
+        .into_iter()
+        .next()
+    {
+        let add_sources = payload
+            .controllers
+            .add_sources
+            .iter()
+            .map(ctrl_add_source_row)
+            .collect();
+        slots.set(id, SlotValue::array(add_sources));
     }
     let board = &payload.board;
     for (name, value) in [
@@ -758,7 +815,7 @@ pub(crate) fn render_redesign(
     let prefix = body_prefix_no_refresh(payload);
     let macro_ssr_html = crate::render_workbench::macro_dialog_ssr_html(&payload.controllers.mac);
     let rendered = render_page(&PageConfig {
-        title: "ksx Studio — redesign",
+        title: "ksx Studio — Workbench",
         route_pattern: "/redesign",
         manifest: &page.manifest,
         config_script: None,
@@ -1132,11 +1189,19 @@ mod tests {
     /// with the reason instead of hiding it.
     #[test]
     fn the_controller_cards_and_picker_speak_the_daemons_truth() {
-        let staged = fixture_staged(vec![
+        let mut staged = fixture_staged(vec![
             fixture_slot(1, "xbox360", true, "Player 1"),
             fixture_slot(2, "playstation", false, "Player 2"),
             fixture_slot(3, "xbox360", true, "Player 3"),
         ]);
+        let add_device = ksx_api::StagedDeviceView {
+            label: "Ultimarc I-PAC 4".into(),
+            alias: "panel".into(),
+            selector: "usb:d209:0430:00".into(),
+            ..Default::default()
+        };
+        staged.device = Some(add_device.clone());
+        staged.devices = vec![add_device];
         let view = RedesignControllers::of(&staged, None, None, None, None);
         assert_eq!(view.cards.len(), 3);
         assert_eq!(
@@ -1158,6 +1223,21 @@ mod tests {
             "the next preset is served — it becomes a file name"
         );
         assert_eq!(view.add_layout, "keyboard-2p");
+        assert_eq!(
+            view.add_layout_label, "keyboard-2p",
+            "an older producer without layout rows still exposes the exact id"
+        );
+        let mut labelled = staged.clone();
+        labelled.layouts = vec![ksx_api::TemplateRow {
+            id: "keyboard-2p".into(),
+            label: "Two players sharing one keyboard".into(),
+            ..Default::default()
+        }];
+        assert_eq!(
+            RedesignControllers::of(&labelled, None, None, None, None).add_layout_label,
+            "Two players sharing one keyboard",
+            "the visible starting-layout name comes from the served template roster"
+        );
         assert!(
             view.add_note.contains("nothing is saved or started"),
             "{}",
@@ -1192,11 +1272,18 @@ mod tests {
         }
 
         // A full house says the nocturne sentence and offers no preset.
-        let full = fixture_staged(
+        let mut full = fixture_staged(
             (1..=16)
                 .map(|n| fixture_slot(n, "playstation", false, "P"))
                 .collect(),
         );
+        full.device = Some(ksx_api::StagedDeviceView {
+            label: "Ultimarc I-PAC 4".into(),
+            alias: "panel".into(),
+            selector: "usb:d209:0430:00".into(),
+            ..Default::default()
+        });
+        full.devices = vec![full.device.clone().expect("full-house source")];
         let full_view = RedesignControllers::of(&full, None, None, None, None);
         assert_eq!(full_view.add_preset, "");
         assert!(
@@ -1224,9 +1311,31 @@ mod tests {
     fn the_controller_picker_is_served() {
         let page = EmbeddedPage::load("/redesign").unwrap();
         let mut payload = fixture_payload();
-        payload.controllers.add_source = "usb:secondary-board".into();
+        let source = payload
+            .devices
+            .encoders
+            .first_mut()
+            .expect("fixture encoder source");
+        source.aria_current = "true".into();
+        source.staged_revision = "k1-secondary-board".into();
+        payload.controllers.add_source.clone_from(&source.selector);
         payload.controllers.add_source_revision = "k1-secondary-board".into();
+        payload.controllers.add_sources = vec![RedesignControllerSourceRow {
+            selector: source.selector.clone(),
+            revision: "k1-secondary-board".into(),
+            label: "Ultimarc I-PAC 4 · USB D209:0430 · connection 00".into(),
+            selected: true,
+            disabled: false,
+        }];
+        payload.controllers.add_source_state = "ready".into();
+        payload.controllers.add_source_reason.clear();
+        payload.controllers.add_layout_label = "Two players sharing one keyboard".into();
         payload.operations.draft_revision = "d1-whole-draft".into();
+        for persona in &mut payload.controllers.personas {
+            persona.usable = "true".into();
+            persona.cls = "n-dev".into();
+            persona.note.clear();
+        }
         let html = render_redesign(&page, &payload, None).html;
         assert!(
             html.contains(r#"data-nx="rd-ctrls-open""#),
@@ -1247,6 +1356,34 @@ mod tests {
             html.contains(r#"data-rd-form="controller-add""#),
             "the add form declares its wiring type"
         );
+        let persona_forms = html
+            .split("<form")
+            .skip(1)
+            .filter(|fragment| fragment.contains(r#"data-rd-form="controller-add""#))
+            .map(|fragment| fragment.split("</form>").next().unwrap_or(fragment))
+            .collect::<Vec<_>>();
+        assert!(!persona_forms.is_empty(), "the picker has no persona forms");
+        assert!(
+            persona_forms.iter().all(|form| {
+                form.contains(r#"aria-disabled="false""#)
+                    && form.contains(r#"aria-describedby="rd-persona-reason-"#)
+                    && form.contains("rd-add-row-action")
+                    && form.contains("Add")
+            }),
+            "available SSR persona rows must carry their action and accessibility state: {persona_forms:#?}"
+        );
+        assert!(
+            html.contains(r#"id="rd-controller-add-source""#)
+                && html.contains("Ultimarc I-PAC 4 · USB D209:0430 · connection 00")
+                && html.contains(r#"selected"#),
+            "the exact selected input is visible before the persona forms"
+        );
+        assert!(
+            html.contains("Starting layout ·")
+                && html.contains("Two players sharing one keyboard")
+                && html.contains("keyboard-2p"),
+            "the selected starting layout is visible before Add"
+        );
         assert!(
             html.contains(r#"name="layout""#) && html.contains(r#"name="persona""#),
             "the add form posts persona and the served layout"
@@ -1255,13 +1392,151 @@ mod tests {
             r#"name="source""#,
             r#"name="expected_revision""#,
             r#"name="expected_source_revision""#,
-            "usb:secondary-board",
+            "usb:d209:0430:00",
             "k1-secondary-board",
             "d1-whole-draft",
         ] {
             assert!(
                 html.contains(authority),
                 "the add form must carry exact source authority: {authority}"
+            );
+        }
+
+        payload.controllers.add_source.clear();
+        payload.controllers.add_source_revision.clear();
+        payload.controllers.add_sources.clear();
+        payload.controllers.add_source_state = "missing".into();
+        payload.controllers.add_source_reason =
+            "Add a keyboard or encoder to the canvas before adding a controller.".into();
+        let no_source_html = render_redesign(&page, &payload, None).html;
+        let no_source_forms = no_source_html
+            .split("<form")
+            .skip(1)
+            .filter(|fragment| fragment.contains(r#"data-rd-form="controller-add""#))
+            .map(|fragment| fragment.split("</form>").next().unwrap_or(fragment))
+            .collect::<Vec<_>>();
+        assert!(
+            !no_source_forms.is_empty()
+                && no_source_forms.iter().all(|form| {
+                    form.contains(r#"aria-disabled="true""#)
+                        && form.contains("Unavailable")
+                        && form.contains("Add a keyboard or encoder to the canvas")
+                }),
+            "a source-less cold render must explain and disable every controller choice"
+        );
+    }
+
+    #[test]
+    fn refused_scan_keeps_the_authoritative_controller_source_roster() {
+        let page = EmbeddedPage::load("/redesign").unwrap();
+        let left = ksx_api::StagedDeviceView {
+            label: "Left keyboard".into(),
+            alias: "left".into(),
+            selector: "usb:1111:0001:00".into(),
+            ..Default::default()
+        };
+        let right = ksx_api::StagedDeviceView {
+            label: "Right keyboard".into(),
+            alias: "right".into(),
+            selector: "usb:2222:0002:00".into(),
+            ..Default::default()
+        };
+        let mut staged = fixture_staged(Vec::new());
+        staged.empty = false;
+        staged.device = Some(left.clone());
+        staged.devices = vec![left, right.clone()];
+        let payload = payload(PayloadInput {
+            environment: &ksx_api::RuntimeEnvironmentView::default(),
+            setup: Some(ksx_api::SetupView::default()),
+            setup_error: "",
+            scan: Err("Device discovery temporarily refused".into()),
+            staged: &staged,
+            session: &crate::control::SessionView {
+                reachable: true,
+                line: "idle".into(),
+                ..Default::default()
+            },
+            outputs: &ksx_api::ControllerOutputsView::default(),
+            selected_slot: None,
+            selected_source: Some(&right.selector),
+            undo_label: None,
+            macro_selected: None,
+            q: None,
+        });
+
+        assert!(payload.devices.keyboards.is_empty());
+        assert_eq!(payload.controllers.add_sources.len(), 2);
+        assert_eq!(payload.controllers.add_source, right.selector);
+        assert_eq!(
+            payload
+                .controllers
+                .add_sources
+                .iter()
+                .filter(|row| row.selected)
+                .map(|row| row.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Right keyboard · USB 2222:0002 · connection 00"]
+        );
+
+        let html = render_redesign(&page, &payload, None).html;
+        assert!(html.contains("Left keyboard · USB 1111:0001 · connection 00"));
+        assert!(html.contains("Right keyboard · USB 2222:0002 · connection 00"));
+        let selected = html
+            .find(r#"value="usb:2222:0002:00""#)
+            .expect("right source option");
+        assert!(
+            html[selected..].starts_with(r#"value="usb:2222:0002:00" selected"#)
+                || html[selected..]
+                    .split('>')
+                    .next()
+                    .is_some_and(|option| option.contains("selected")),
+            "the exact selected staged source must remain selected: {}",
+            &html[selected..html.len().min(selected + 180)]
+        );
+    }
+
+    #[test]
+    fn lifecycle_availability_is_truthful_before_hydration() {
+        let page = EmbeddedPage::load("/redesign").unwrap();
+        let mut payload = fixture_payload();
+
+        let render_forms = |payload: &RedesignPayload| {
+            let html = render_redesign(&page, payload, None).html;
+            ["save", "apply", "play", "stop"]
+                .into_iter()
+                .map(|kind| {
+                    let marker = format!(r#"data-rd-form="{kind}""#);
+                    let start = html.find(&marker).expect("lifecycle form marker");
+                    html[start..]
+                        .split("</form>")
+                        .next()
+                        .expect("lifecycle form body")
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        payload.operations.save.allowed = false;
+        payload.operations.apply.allowed = false;
+        payload.operations.play.allowed = false;
+        payload.operations.stop.allowed = false;
+        for form in render_forms(&payload) {
+            assert!(form.contains(r#"aria-disabled="true""#), "{form}");
+            assert!(
+                form.contains(r#"data-rd-product-disabled="true""#),
+                "{form}"
+            );
+        }
+
+        payload.operations.save.allowed = true;
+        payload.operations.apply.allowed = true;
+        payload.operations.play.allowed = true;
+        payload.operations.stop.allowed = true;
+        for form in render_forms(&payload) {
+            assert!(form.contains(r#"aria-disabled="false""#), "{form}");
+            assert!(
+                form.contains(r#"data-rd-product-disabled="false""#),
+                "{form}"
             );
         }
     }
@@ -1822,9 +2097,17 @@ mod tests {
     #[test]
     fn the_redesign_head_is_complete() {
         let page = EmbeddedPage::load("/redesign").unwrap();
-        assert_complete_head(
-            "/redesign",
-            &render_redesign(&page, &fixture_payload(), None).html,
+        let html = render_redesign(&page, &fixture_payload(), None).html;
+        assert_complete_head("/redesign", &html);
+        assert_eq!(
+            html.matches("<title>ksx Studio — Workbench</title>")
+                .count(),
+            1,
+            "the workbench document title is user-facing and unique"
+        );
+        assert!(
+            !html.contains("<title>ksx Studio — redesign</title>"),
+            "the internal migration name must not leak into the document title"
         );
     }
 
@@ -1912,6 +2195,22 @@ mod tests {
             marked, 1,
             "{marked} theme rows claim to be current in the {home}",
         );
+        let entry_stops = forms
+            .iter()
+            .filter(|form| form.contains(r#"tabindex="0""#))
+            .count();
+        assert_eq!(
+            entry_stops, 1,
+            "the {home} must serve exactly one radio-group entry stop",
+        );
+        assert_eq!(
+            forms
+                .iter()
+                .filter(|form| form.contains(r#"tabindex="-1""#))
+                .count(),
+            expected - 1,
+            "every other {home} theme row must leave the native Tab sequence",
+        );
         // Every theme speaks its own sentence — Dark and Matrix share a
         // scheme, so a derived sentence once made two rows word-identical.
         for meta in crate::theme_tokens::THEMES {
@@ -1953,6 +2252,7 @@ mod tests {
             LIST_SLOT_DEV_ENC,
             LIST_SLOT_DEV_EXP,
             LIST_SLOT_DEV_OTHER,
+            LIST_SLOT_CTRL_ADD_SOURCES,
             LIST_SLOT_CTRL_PERSONAS,
             LIST_SLOT_CAPTURE_HELD,
         ] {
@@ -2040,6 +2340,7 @@ mod tests {
             "rdCtrlCountsLine",
             "rdCtrlAddPreset",
             "rdCtrlAddLayout",
+            "rdCtrlAddLayoutLabel",
             "rdUndoCls",
             "rdUndoLabel",
             "rdKbTitle",
@@ -2064,6 +2365,7 @@ mod tests {
             "rdDevEnc",
             "rdDevExp",
             "rdDevOther",
+            "rdCtrlAddSources",
             "rdCtrlPersonas",
             "rdKbRow1",
             "rdKbRow2",

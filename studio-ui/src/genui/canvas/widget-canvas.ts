@@ -1967,8 +1967,12 @@ export class WidgetCanvas {
           return;
         }
         const host = this.#runtimeHosts.get(this.#itemId(item));
-        const opened = host?.focusFirstInteractive() === true ||
-          this.#onOpenActiveControls(item) === true;
+        // Give the owning surface first refusal. It may need to cross a
+        // semantic-zoom threshold or open containing chrome before a runtime
+        // control is genuinely usable; focusing the runtime first bypassed
+        // that preparation under forced-colors styles.
+        const opened = this.#onOpenActiveControls(item) === true ||
+          host?.focusFirstInteractive() === true;
         if (!opened) {
           this.#onKeyboardNavigation(
             `${item.dataset.widgetName ?? "Widget"} has no available interactive controls.`,

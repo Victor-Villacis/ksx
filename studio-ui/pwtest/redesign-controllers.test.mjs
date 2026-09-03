@@ -94,6 +94,23 @@ const IPAC_ID = deviceInstanceId(IPAC);
 
 const api = async () => (await fetch(`${BASE}/api/redesign`)).json();
 
+async function postForm(pathname, fields) {
+  return fetch(`${BASE}${pathname}`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(fields),
+    redirect: "manual",
+  });
+}
+
+function payloadDevice(payload, selector) {
+  return [
+    ...(payload.devices?.keyboards ?? []),
+    ...(payload.devices?.encoders ?? []),
+    ...(payload.devices?.experimental ?? []),
+  ].find((row) => row.selector === selector);
+}
+
 function exactSource(pad, selector) {
   const source = pad?.sources?.find(
     (candidate) => (candidate.source_id ?? candidate.sourceId) === selector,
@@ -328,6 +345,151 @@ describe("the controller workbench", () => {
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
     await page.close();
+  });
+
+  test("Add Controller visibly chooses one exact input and posts its current authority", async () => {
+    let page;
+    let temporarySlot;
+    let stagedG915 = false;
+    try {
+      let payload = await api();
+      assert.equal(
+        payloadDevice(payload, G915)?.aria_current,
+        "false",
+        "the focused regression starts with the peer keyboard outside the draft",
+      );
+      const staged = await postForm("/redesign/device", {
+        selector: G915,
+        alias: "g915",
+        label: "Logitech G915 TKL",
+      });
+      assert.equal(staged.status, 303, "could not stage the second exact source");
+      stagedG915 = true;
+      payload = await api();
+      const g915 = payloadDevice(payload, G915);
+      assert.equal(g915?.aria_current, "true");
+      assert.ok(g915?.staged_revision, "the selectable source needs exact-device authority");
+      const occupied = new Set(payload.controllers.cards.map((card) => Number(card.number)));
+      temporarySlot = Array.from({ length: 16 }, (_, index) => index + 1)
+        .find((slot) => !occupied.has(slot));
+      assert.ok(temporarySlot, "the fixture needs one free controller slot");
+
+      page = await openBench();
+      await page.locator('[data-nx="rd-ctrls-open"]').click();
+      const select = page.locator("#rd-controller-add-source");
+      await select.waitFor({ state: "visible" });
+      assert.equal(
+        await select.evaluate((element) =>
+          Boolean(element.compareDocumentPosition(
+              document.querySelector(".rd-ctrlmodal .rd-devhead"),
+            ) & Node.DOCUMENT_POSITION_FOLLOWING)
+        ),
+        true,
+        "source choice must precede the persona Add rows",
+      );
+      assert.deepEqual(
+        await select.locator("option:not([value=''])").evaluateAll((options) =>
+          options.map((option) => ({ value: option.value, text: option.textContent?.trim() }))
+            .sort((left, right) => left.value.localeCompare(right.value))),
+        [
+          {
+            value: G915,
+            text: "Logitech G915 TKL · USB 046D:C545 · connection 00",
+          },
+          {
+            value: IPAC,
+            text: "Ultimarc I-PAC 4 · USB D209:0430 · connection 00",
+          },
+        ],
+        "the chooser must expose exact, distinguishable source identity",
+      );
+      assert.equal(await select.inputValue(), IPAC, "the served default source is explicit");
+      assert.match(
+        (await page.locator("[data-rd-controller-add-layout]").textContent()) ?? "",
+        /Starting layout.*Two players sharing ONE keyboard.*keyboard-2p/i,
+        "the current starting layout is visible before a persona is chosen",
+      );
+
+      await select.selectOption(G915);
+      const refreshed = page.waitForResponse((response) =>
+        response.url().includes("/api/redesign") && response.request().method() === "GET"
+      );
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await refreshed;
+      await page.waitForFunction(
+        (source) => document.querySelector("#rd-controller-add-source")?.value === source,
+        G915,
+      );
+      assert.equal(
+        await select.inputValue(),
+        G915,
+        "the two-second authority repaint cannot reset an explicit picker choice",
+      );
+      const forms = page.locator('form[data-rd-form="controller-add"]');
+      assert.equal(
+        await forms.locator('input[name="source"]').evaluateAll((inputs) =>
+          inputs.every((input) => input.value === "usb:046d:c545:00")
+        ),
+        true,
+        "every persona form switched to the chosen raw selector",
+      );
+      assert.equal(
+        await forms.locator('input[name="expected_source_revision"]').evaluateAll(
+          (inputs, revision) => inputs.every((input) => input.value === revision),
+          g915.staged_revision,
+        ),
+        true,
+        "every persona form switched to the chosen exact-device revision",
+      );
+
+      await forms.filter({ has: page.locator('input[name="persona"][value="xbox360"]') })
+        .first().locator("button").click();
+      await page.waitForFunction(
+        ({ slot, source }) => fetch("/api/redesign").then((response) => response.json()).then(
+          (next) => next.controllers.pads.some((pad) =>
+            Number(pad.slot) === slot &&
+            pad.sources?.some((row) => row.source_id === source && row.routed === true)
+          ),
+        ),
+        { slot: temporarySlot, source: G915 },
+        { timeout: 10_000 },
+      );
+      const added = (await api()).controllers.pads.find(
+        (pad) => Number(pad.slot) === temporarySlot,
+      );
+      assert.deepEqual(
+        added.sources.filter((source) => source.routed).map((source) => source.source_id),
+        [G915],
+        "Add Controller created the slot against only the visibly chosen source",
+      );
+      assert.deepEqual(page.ksxNoise, []);
+    } finally {
+      if (page && !page.isClosed()) await page.close();
+      if (temporarySlot) {
+        const payload = await api();
+        const card = payload.controllers.cards.find(
+          (candidate) => Number(candidate.number) === temporarySlot,
+        );
+        if (card) {
+          await postForm("/redesign/controller/remove", {
+            number: String(temporarySlot),
+            expected_revision: payload.operations.draft_revision,
+            expected_target_revision: card.target_revision,
+          });
+        }
+      }
+      if (stagedG915) {
+        const payload = await api();
+        const row = payloadDevice(payload, G915);
+        if (row?.aria_current === "true") {
+          await postForm("/redesign/device/remove", {
+            selector: G915,
+            expected_revision: payload.operations.draft_revision,
+            expected_source_revision: row.staged_revision,
+          });
+        }
+      }
+    }
   });
 
   test("the Add tray serves the roster while the next slot appears on the live canvas", async () => {
@@ -1045,10 +1207,64 @@ describe("the controller workbench", () => {
     assert.equal(await zone.getAttribute("tabindex"), "0");
     assert.match((await zone.getAttribute("aria-label")) ?? "", /controller control$/);
 
+    // Fit is a reading distance: dense SVG controls leave the accessibility
+    // tree immediately, while the outer canvas item remains the one honest
+    // navigation target. Returning to the controller restores editability.
+    const controller = page.locator(cardSel(1));
+    const artSurface = controller.locator(".rd-ctrlcard-artwrap");
+    await page.click('[data-nx="canvas-fit"]');
+    await page.waitForFunction(
+      (selector) =>
+        !document.querySelector(".is-camera-animating") &&
+        document.querySelector(selector)?.dataset.controllerArtInteractive === "false",
+      cardSel(1),
+    );
+    assert.equal(await artSurface.evaluate((surface) => surface.inert), true);
+    assert.equal(await artSurface.getAttribute("aria-hidden"), "true");
+    assert.equal(
+      await page.locator(
+        '.rd-ctrl-node[data-controller-art-interactive="false"] ' +
+          ":is(.rd-ctrlcard-artwrap, .n-ds4-variants, .n-controller-variants)",
+      ).evaluateAll((surfaces) => surfaces.reduce(
+        (count, surface) => count + Array.from(
+          surface.querySelectorAll("button, [href], input, select, textarea, [tabindex]"),
+        ).filter((control) => control.tabIndex >= 0).length,
+        0,
+      )),
+      0,
+      "semantic zoom left a hidden controller control in the Tab order",
+    );
+    await revealCanvasItem(page, "ctrl-slot-1");
+    await page.waitForFunction(
+      (selector) => document.querySelector(selector)?.dataset.controllerArtInteractive === "true",
+      cardSel(1),
+    );
+
     // Non-pointer activation must perform the selection work that a real
     // pointerdown normally performs. Start from the keyboard board so this test
-    // cannot pass merely because the controller was already selected.
-    await revealCanvasItem(page, G915_ID);
+    // cannot pass merely because the controller was already selected. Dispatch
+    // the real selection gesture without moving the camera away from the
+    // controller's truthful editing scale.
+    await page.locator(`.forma-canvas-stage > [data-instance-id="${G915_ID}"]`)
+      .evaluate((item) => {
+        const init = {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          cancelable: true,
+          isPrimary: true,
+          pointerId: 1,
+          pointerType: "mouse",
+        };
+        item.dispatchEvent(new PointerEvent("pointerdown", init));
+        item.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
+      });
+    await page.waitForFunction(
+      (id) => document.querySelector(
+        `.forma-canvas-stage > [data-instance-id="${id}"]`,
+      )?.getAttribute("aria-current") === "true",
+      G915_ID,
+    );
     assert.equal(
       await page
         .locator(`.forma-canvas-stage > [data-instance-id="${G915_ID}"]`)
@@ -1056,12 +1272,8 @@ describe("the controller workbench", () => {
       "true",
     );
     assert.equal((await page.locator(".rd-insp-name").textContent())?.trim(), "Logitech G915 TKL");
-    // The device-owned keyboard is a full board now. Frame the whole bench so
-    // the controller runtime remains materialized while selection still rests
-    // on that independent source board.
-    await page.click('[data-nx="canvas-fit"]');
-    await page.waitForFunction(() => !document.querySelector(".is-camera-animating"));
     await zone.focus();
+    assert.equal(await zone.evaluate((control) => control === document.activeElement), true);
     // An unchanged background repaint must not replace the focused SVG node.
     await page.waitForTimeout(2300);
     assert.equal(
@@ -1439,7 +1651,12 @@ describe("the mapper on the workbench", () => {
       { timeout: 20_000 },
     );
     await revealCanvasItem(page, `ctrl-slot-${slot}`);
-    await page.click(`${cardSel(slot)} .rd-ctrlcard-slot`);
+    // revealCanvasItem selects the card. On phones that selection immediately
+    // opens a full-screen modal Inspector, so a second pointer click on the
+    // card is both redundant and correctly blocked by the modal layer.
+    if (await page.locator(".rd-inspector").isHidden()) {
+      await page.click(`${cardSel(slot)} .rd-ctrlcard-slot`);
+    }
     await page.waitForFunction(
       () => Boolean(document.querySelector(".rd-insp-vseg .vc")),
       null,
@@ -1540,6 +1757,51 @@ describe("the mapper on the workbench", () => {
     }));
     assert.deepEqual(state, { banner: "none", dialog: "none" });
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("a phone conflict dialog temporarily owns the Inspector modal layer", async () => {
+    const page = await openBench();
+    await page.setViewportSize({ width: 390, height: 844 });
+    if (!(await page.locator(".rd-inspector").isHidden())) {
+      await page.keyboard.press("Escape");
+      await page.locator(".rd-inspector").waitFor({ state: "hidden" });
+    }
+    await ensureActiveEncoder(page);
+    await openPanel(page, s1);
+    const inspector = page.locator(".rd-inspector");
+    const main = page.locator("main.n-main");
+    assert.equal(await inspector.getAttribute("aria-modal"), "true");
+    assert.equal(await main.getAttribute("inert"), "");
+
+    const chipSel = '.rd-insp-body details.n-bind[data-fn="A"] [data-nx="chip-learn"]';
+    await page.locator(chipSel).click();
+    await dialogShown(page);
+    assert.equal(await inspector.isHidden(), true, "the parent Inspector remained modal");
+    assert.equal(await main.getAttribute("inert"), null, "the child dialog stayed inside inert main");
+    assert.equal(
+      await page.locator('[role="dialog"][aria-modal="true"]:visible').count(),
+      1,
+      "the phone exposed two modal focus contexts",
+    );
+    assert.equal(
+      await page.locator(".rd-confdlg .nd").evaluate((dialog) => dialog.contains(document.activeElement)),
+      true,
+      "the consequence dialog did not receive focus",
+    );
+
+    await page.keyboard.press("Escape");
+    await dialogGone(page);
+    await inspector.waitFor({ state: "visible" });
+    assert.equal(await inspector.getAttribute("aria-modal"), "true");
+    assert.equal(await main.getAttribute("inert"), "");
+    await page.waitForTimeout(50);
+    assert.equal(
+      await page.locator(chipSel).evaluate((chip) => chip === document.activeElement),
+      true,
+      "closing the child dialog did not restore the initiating mapping control",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the nested modal handoff stays browser-error free");
     await page.close();
   });
 
@@ -1891,6 +2153,60 @@ describe("the mapper on the workbench", () => {
       "the saved table holds what the roll showed",
     );
     assert.deepEqual(page.ksxNoise, [], "the page must stay error-free");
+    await page.close();
+  });
+
+  test("a phone macro editor temporarily owns the Inspector modal layer", async () => {
+    const page = await openBench();
+    await page.setViewportSize({ width: 390, height: 844 });
+    if (!(await page.locator(".rd-inspector").isHidden())) {
+      await page.keyboard.press("Escape");
+      await page.locator(".rd-inspector").waitFor({ state: "hidden" });
+    }
+    await openPanel(page, s1);
+    const inspector = page.locator(".rd-inspector");
+    const main = page.locator("main.n-main");
+    const row = '.n-macrosec details[data-fn="macro.probe-roll"]';
+    await page.waitForFunction((sel) => Boolean(document.querySelector(sel)), row);
+    await page.evaluate((sel) => document.querySelector(sel)?.setAttribute("open", ""), row);
+    await page.locator(`${row} a.n-bbtn-link`).click();
+    const dialog = page.locator('.rd-macdlg [role="dialog"]');
+    await dialog.waitFor({ state: "visible" });
+    assert.equal(await inspector.isHidden(), true, "the parent Inspector remained modal");
+    assert.equal(await main.getAttribute("inert"), null, "the macro editor stayed inside inert main");
+    assert.equal(
+      await page.locator('[role="dialog"][aria-modal="true"]:visible').count(),
+      1,
+      "the phone exposed two modal focus contexts",
+    );
+    assert.equal(
+      await dialog.evaluate((panel) => panel.contains(document.activeElement)),
+      true,
+      "the macro editor did not receive focus",
+    );
+    await page.keyboard.press("Control+K");
+    assert.equal(
+      await page.locator(".rd-palette").isHidden(),
+      true,
+      "the global palette stacked over the macro editor",
+    );
+    assert.equal(
+      await page.locator('[role="dialog"][aria-modal="true"]:visible').count(),
+      1,
+      "Ctrl+K created a second modal focus context",
+    );
+
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "hidden" });
+    await inspector.waitFor({ state: "visible" });
+    assert.equal(await inspector.getAttribute("aria-modal"), "true");
+    assert.equal(await main.getAttribute("inert"), "");
+    assert.equal(
+      await inspector.evaluate((panel) => panel.contains(document.activeElement)),
+      true,
+      "closing the macro editor did not return focus to the Inspector",
+    );
+    assert.deepEqual(page.ksxNoise, [], "the nested macro handoff stays browser-error free");
     await page.close();
   });
 

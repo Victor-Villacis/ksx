@@ -33,7 +33,10 @@ export function createCanvasItem(options: CanvasItemOptions): HTMLElement {
   if (!document_) {
     throw new Error("document is required when no runtime host or content node is supplied");
   }
-  const item = document_.createElement("article");
+  // Canvas instances participate in the workbench's explicit `role="list"`
+  // composite. A neutral element keeps `listitem` as the single, valid
+  // semantic identity instead of overriding an article landmark.
+  const item = document_.createElement("div");
   item.className = "widget-instance";
   item.dataset.instanceId = options.instanceId;
   item.dataset.widgetName = options.displayName;

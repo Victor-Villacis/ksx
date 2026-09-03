@@ -126,6 +126,8 @@ export interface MapperHost {
    *  from begin = another mutation owns the page; the commit waits. */
   beginMutation(): unknown | null;
   endMutation(token: unknown): void;
+  /** Coordinate a consequence dialog with a modal phone Inspector. */
+  childModal?(open: boolean): void;
 }
 
 const LEARN_POLL_MS = 33;
@@ -1092,6 +1094,7 @@ function openConflict(title: string, lines: string): void {
     conflictReturnFocus = active;
     conflictReturnSelector = conflictOpenerSelector(active);
   }
+  host?.childModal?.(true);
   const t = dialog.querySelector<HTMLElement>(".nd-title");
   const l = dialog.querySelector<HTMLElement>(".nd-lede");
   if (t) t.textContent = title;
@@ -1110,8 +1113,21 @@ function dismissConflict(restoreFocus = true): void {
   pendingConflict = null;
   const dialog = conflictDialog();
   const wasOpen = Boolean(dialog && !dialog.classList.contains("none"));
+  const shouldRestore = restoreFocus && (wasOpen || conflictReturnFocus !== null);
+  const savedFocus = shouldRestore ? takeConflictFocus() : null;
   if (dialog) dialog.classList.add("none");
-  if (restoreFocus && (wasOpen || conflictReturnFocus !== null)) restoreConflictFocus();
+  if (wasOpen) host?.childModal?.(false);
+  if (savedFocus) {
+    if (wasOpen) {
+      // On phone the child coordinator first rebuilds/reopens the suspended
+      // Inspector in its own animation frame. Restore the logical mapping
+      // chip one frame later so the coordinator's safe X fallback cannot
+      // overwrite this more precise return target.
+      window.requestAnimationFrame(() => restoreConflictFocus(savedFocus));
+    } else {
+      restoreConflictFocus(savedFocus);
+    }
+  }
 }
 
 /** Accepting a conflict hides the modal before its write/refresh completes.

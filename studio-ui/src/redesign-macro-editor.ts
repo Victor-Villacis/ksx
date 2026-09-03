@@ -227,6 +227,8 @@ export interface MacHost {
   /** The page repaint (the entry's refresh) — a save's truth comes back on
    *  the next served payload. */
   refresh(): Promise<boolean>;
+  /** Coordinate the editor with a modal phone Inspector. */
+  childModal?(open: boolean): void;
 }
 
 let host: MacHost | null = null;
@@ -858,6 +860,7 @@ function adoptServedDialog(v: RdMacView): boolean {
   if (!holder || !dlg?.querySelector("[data-rd-mac-ssr]")) return false;
 
   holder.className = `rd-macdlg ${v.back_cls}`;
+  host?.childModal?.(true);
   macDialogWasOpen = true;
   macDialogIdentity = `${v.source?.trim() ?? ""}\u0000${v.slot}\u0000${v.name}`;
   macGridFocusCell =
@@ -894,6 +897,7 @@ function renderDialog(v: RdMacView): void {
     macGridFocusCell = null;
     macFocusBookmark = null;
     if (wasOpen) {
+      host?.childModal?.(false);
       scheduleMacroOpenerRestore(v, macReturnTarget, !macCloseRefreshPending);
     }
     return;
@@ -912,6 +916,7 @@ function renderDialog(v: RdMacView): void {
     }
     macGridFocusCell = null;
     macFocusBookmark = null;
+    host?.childModal?.(true);
   }
   const restoreBookmark = opening ? null : continuingBookmark;
   macDialogWasOpen = true;

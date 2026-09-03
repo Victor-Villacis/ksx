@@ -140,6 +140,29 @@ jobs:
         # Driver-touching tests are behind the `cab-tests` feature and never run here.
         # The vendored vigem-client's integration tests need the ViGEmBus driver: compile-check only.
         run: cargo test --workspace --exclude vigem-client
+      # E7 (docs/ENHANCEMENTS.md "Provable, all three ways") promised that the
+      # default build links no axum/tokio/forma and no eframe/egui/winit, and
+      # wrote down the `cargo tree` lines that prove it — and until 2026-09-02
+      # no workflow ran them. The VIIPER lane (crates/ksx-viiper) adds the
+      # crates IT must never drag into the default build either: the upstream
+      # MIT client's async feature (tokio) and its crypto stack. The pattern is
+      # anchored on the crate name at the start of a `--prefix none` line, not
+      # on the whole line, because a checkout path can contain any of these
+      # words (a worktree named `…-viiper-client` matched 26 lines).
+      - name: E7 dependency gate (default build links no web, async or crypto runtime)
+        shell: pwsh
+        run: |
+          function Assert-Absent($label, $features, $pattern) {
+            $cargoArgs = @('tree', '-p', 'ksx-app', '-e', 'normal', '--prefix', 'none')
+            if ($features) { $cargoArgs += @('--features', $features) }
+            $hits = & cargo @cargoArgs | Select-String -Pattern $pattern
+            if ($LASTEXITCODE -ne 0) { throw "cargo tree failed for $label" }
+            if ($hits) { throw "E7: the $label graph links forbidden crates: $($hits.Line -join ', ')" }
+            Write-Host "E7: $label graph clean"
+          }
+          Assert-Absent 'default' '' '^(axum|tokio|forma-ir|forma-server|eframe|egui|winit|viiper-client|chacha20poly1305|pbkdf2) v'
+          Assert-Absent 'cabinet' 'cabinet' '^(axum|tokio|forma-ir|forma-server|viiper-client|chacha20poly1305|pbkdf2) v'
+          Assert-Absent 'studio' 'studio' '^(eframe|egui|winit|viiper-client|chacha20poly1305|pbkdf2) v'
       # `studio` and `cabinet` are independent opt-ins, so the default build
       # compiles neither and CI never saw the code behind them. Three separate
       # breakages reached main that way (87701cd, 4200214, 4135a7b's dead

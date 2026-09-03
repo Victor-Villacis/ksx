@@ -53,6 +53,7 @@ Play owns the hardware boundary. Use
 | config + games + presets TOML, validation | `crates/ksx-config` |
 | capture backends (Interception, WinUSB) behind `CaptureBackend` | `crates/ksx-capture` |
 | ViGEm pad output, persona routing | `crates/ksx-output` |
+| the VIIPER lane: std-only TCP client, report codecs, HID usage map, in-process mock server (no driver, no GPL binary linked) | `crates/ksx-viiper` |
 | Windows plumbing: USB enumeration, WinUSB claim/release | `crates/ksx-platform` |
 | the wire contract between backend and every surface | `crates/ksx-api` |
 | **every verb's body** — daemon, tray, session supervisor, writers | `crates/ksx-backend` |

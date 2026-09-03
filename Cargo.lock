@@ -1804,6 +1804,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ksx-viiper"
+version = "0.5.0"
+dependencies = [
+ "crossbeam-channel",
+ "ksx-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tracing",
+]
+
+[[package]]
 name = "ksx-winusb-helper"
 version = "0.5.0"
 dependencies = [

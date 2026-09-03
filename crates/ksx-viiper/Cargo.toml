@@ -1,0 +1,28 @@
+[package]
+name = "ksx-viiper"
+description = "VIIPER lane: std-only TCP client, device codecs and an in-process mock for the virtual-USB (USB/IP) output lane."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# The product path is plain `std::net` with a deadline on every socket
+# operation. No async runtime, no crypto: localhost needs neither, and the
+# default `ksx-app` build must keep linking none of them (docs/ENHANCEMENTS.md
+# E7, enforced by the CI dependency gate). The MIT `viiper-client` crate is
+# deliberately NOT a dependency — its sync client has no timeouts and its
+# teardown joins a reader thread with no bound (docs/research/viiper-2026.md).
+[dependencies]
+ksx-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+crossbeam-channel.workspace = true
+
+[features]
+# Runs the conformance tests against a real `viiper server` reachable at
+# `KSX_VIIPER_LIVE_ADDR` (e.g. `127.0.0.1:3342`). Never on in CI; a developer
+# opts in after starting the server by hand with explicit loopback arguments.
+viiper-live-tests = []

@@ -440,6 +440,12 @@ In order, cheapest first:
    four combinations for `ksx-app` *and* `ksx-backend`, then executes the
    `studio,cabinet` union, which is the one that enables every gated module at
    once. Do not run the four-way matrix locally; push and let CI do it.
+   CI also runs the **E7 dependency gate** (added 2026-09-02): `cargo tree -p
+   ksx-app -e normal --prefix none` must list no `axum`, `tokio`, `forma-ir`,
+   `forma-server`, `eframe`, `egui` or `winit` crate in the default graph, and
+   none of the VIIPER lane's forbidden crates (`viiper-client`,
+   `chacha20poly1305`, `pbkdf2`) in any graph. Run that line locally before
+   adding a dependency to a crate the default build links.
 5. **The two lines the workspace gate cannot reach, which you *should* run
    locally.**
    ```

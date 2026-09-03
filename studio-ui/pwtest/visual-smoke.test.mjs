@@ -1635,7 +1635,24 @@ describe("redesign canvas interaction chrome", () => {
             );
           };
           target.replaceWith(replacement);
-          resolve({ ...resizedGeometry, replaced: !target.isConnected });
+          // A slow CI runner can spend longer than the old 70ms landing pad
+          // inside one rendering opportunity. Queue a second-axis disclosure
+          // settle for the NEXT opportunity, then deliberately keep this one
+          // busy long enough that a timer-only contract would expire first.
+          requestAnimationFrame(() => {
+            element.style.paddingTop = "180px";
+            element.dataset.regressionLateSettle = "true";
+          });
+          const blockedAt = performance.now();
+          const blockedUntil = blockedAt + 120;
+          while (performance.now() < blockedUntil) {
+            // Intentionally block this rendering opportunity.
+          }
+          resolve({
+            ...resizedGeometry,
+            replaced: !target.isConnected,
+            blockedMs: performance.now() - blockedAt,
+          });
         });
       }));
       assert.equal(
@@ -1644,6 +1661,10 @@ describe("redesign canvas interaction chrome", () => {
         `the reveal regression did not begin clipped: ${JSON.stringify(beforeReveal)}`,
       );
       assert.equal(beforeReveal.replaced, true, "the keyed capture control was not replaced");
+      assert.ok(
+        beforeReveal.blockedMs >= 115,
+        `the slow-frame regression did not outlive the landing pad: ${beforeReveal.blockedMs}`,
+      );
       await page.evaluate(() => new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(resolve));
       }));
@@ -1668,6 +1689,7 @@ describe("redesign canvas interaction chrome", () => {
             targetRect.bottom <= viewportRect.bottom - 17.5,
           hitTestable: hit === target || target.contains(hit),
           replacement: target.dataset.regressionReplacement === "true",
+          lateSettle: element.dataset.regressionLateSettle === "true",
           scrollCalls: target.dataset.regressionScrollCalls ?? "0",
           transform: stage instanceof HTMLElement ? stage.style.transform : "",
           target: {
@@ -1686,6 +1708,7 @@ describe("redesign canvas interaction chrome", () => {
       });
       assert.ok(afterReveal, "the device reveal target disappeared after resize delivery");
       assert.equal(afterReveal.replacement, true, "the reveal target fell back to the stale control");
+      assert.equal(afterReveal.lateSettle, true, "the second-axis disclosure settle did not run");
       assert.equal(
         afterReveal.inside && afterReveal.hitTestable,
         true,

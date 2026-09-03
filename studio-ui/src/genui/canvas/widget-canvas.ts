@@ -295,6 +295,8 @@ const CAMERA_ANIMATION_MS = 260;
 const FOCUS_CAMERA_ANIMATION_MS = 300;
 const PANEL_CAMERA_ANIMATION_MS = 200;
 const CAMERA_ANIMATION_LANDING_PAD_MS = 70;
+const CAMERA_FRAMING_MIN_RENDER_FRAMES = 2;
+const CAMERA_FRAMING_FRAME_RECHECK_MS = 50;
 const MIN_EFFECTIVE_SCALE = MIN_WIDGET_MANUAL_SCALE * DISTANCE_SCALE_MIN;
 const CAMERA_MOTION_SETTLE_MS = 120;
 const DEFAULT_VIRTUALIZATION_DWELL_MS = 2_000;
@@ -3147,6 +3149,8 @@ export class WidgetCanvas {
         : CAMERA_ANIMATION_MS
     );
     this.#viewport.style.setProperty("--canvas-camera-duration", `${duration}ms`);
+    let framingRenderFrames = framingTarget ? 0 : CAMERA_FRAMING_MIN_RENDER_FRAMES;
+    let landingDeadlineReached = false;
 
     const releaseVisualMotion = (): void => {
       this.#viewport.classList.remove("is-camera-animating");
@@ -3165,6 +3169,45 @@ export class WidgetCanvas {
       releaseVisualMotion();
       this.#onCommit();
     };
+    const finishWhenLandingReady = (): void => {
+      if (
+        !framingTarget ||
+        this.#cameraFramingTarget !== framingTarget ||
+        this.#document.visibilityState !== "visible" ||
+        framingRenderFrames >= CAMERA_FRAMING_MIN_RENDER_FRAMES
+      ) {
+        finish();
+        return;
+      }
+      // A visible but blocked/slow renderer may let the wall-clock landing
+      // deadline elapse before ResizeObserver gets another delivery. Keep the
+      // semantic target alive until the required rendering opportunities run;
+      // a hidden document still takes the timer-only fallback above.
+      this.#animationTimer = this.#window.setTimeout(
+        finishWhenLandingReady,
+        CAMERA_FRAMING_FRAME_RECHECK_MS,
+      );
+    };
+    const reachLandingDeadline = (): void => {
+      landingDeadlineReached = true;
+      finishWhenLandingReady();
+    };
+    const countFramingRender = (): void => {
+      if (
+        this.#disposed ||
+        !framingTarget ||
+        this.#cameraFramingTarget !== framingTarget
+      ) return;
+      framingRenderFrames += 1;
+      if (framingRenderFrames < CAMERA_FRAMING_MIN_RENDER_FRAMES) {
+        this.#window.requestAnimationFrame(countFramingRender);
+      } else if (landingDeadlineReached) {
+        finishWhenLandingReady();
+      }
+    };
+    const beginFramingRenderContract = (): void => {
+      if (framingTarget) this.#window.requestAnimationFrame(countFramingRender);
+    };
 
     // The target camera is written before any visual tween. That is the
     // background-tab landing guarantee: even if the browser delivers no
@@ -3174,11 +3217,12 @@ export class WidgetCanvas {
     // measurements cannot change where the widget lands.
     if (reducedMotion) {
       this.#renderCameraNow();
+      beginFramingRenderContract();
       releaseVisualMotion();
       this.#scheduleChange();
       if (framingTarget) {
         this.#animationTimer = this.#window.setTimeout(
-          finish,
+          reachLandingDeadline,
           duration + CAMERA_ANIMATION_LANDING_PAD_MS,
         );
       } else {
@@ -3188,6 +3232,7 @@ export class WidgetCanvas {
     }
     this.#viewport.classList.add("is-camera-animating");
     this.#renderCameraNow();
+    beginFramingRenderContract();
     this.#animationEndListener = (event) => {
       if (event.target !== this.#stage || event.propertyName !== "transform") return;
       this.#stage.removeEventListener("transitionend", this.#animationEndListener!);
@@ -3202,7 +3247,7 @@ export class WidgetCanvas {
     // internal camera and inline transform are already exact; this fallback
     // releases transient interaction state even when rendering was throttled.
     this.#animationTimer = this.#window.setTimeout(
-      finish,
+      reachLandingDeadline,
       duration + CAMERA_ANIMATION_LANDING_PAD_MS,
     );
     this.#scheduleChange();

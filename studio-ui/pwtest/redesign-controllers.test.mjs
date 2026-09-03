@@ -1040,18 +1040,47 @@ describe("the controller workbench", () => {
     await openControls.waitFor({ state: "visible" });
     const mobileLauncherGeometry = await openControls.evaluate((button) => {
       const rect = button.getBoundingClientRect();
-      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const point = {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      };
+      const hit = document.elementFromPoint(point.x, point.y);
+      const viewport = document.querySelector(".forma-canvas-viewport")?.getBoundingClientRect();
       return {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
         width: rect.width,
         height: rect.height,
         hitTestable: hit === button || button.contains(hit),
+        hit: hit instanceof HTMLElement
+          ? {
+              tag: hit.tagName,
+              className: hit.className,
+              dataNx: hit.dataset.nx,
+              instanceId: hit.closest("[data-instance-id]")?.getAttribute("data-instance-id"),
+            }
+          : null,
+        viewport: viewport
+          ? {
+              left: viewport.left,
+              top: viewport.top,
+              right: viewport.right,
+              bottom: viewport.bottom,
+            }
+          : null,
       };
     });
     assert.ok(
       mobileLauncherGeometry.width >= 100 && mobileLauncherGeometry.height >= 39.5,
       `phone launcher must remain an honest target (${mobileLauncherGeometry.width}×${mobileLauncherGeometry.height})`,
     );
-    assert.equal(mobileLauncherGeometry.hitTestable, true);
+    assert.equal(
+      mobileLauncherGeometry.hitTestable,
+      true,
+      `phone launcher must own its centre hit target: ${JSON.stringify(mobileLauncherGeometry)}`,
+    );
     await openControls.click();
     await page.waitForFunction(
       (id) => {

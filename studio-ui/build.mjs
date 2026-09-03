@@ -288,10 +288,11 @@ try {
     // controls, guarded recovery focus, and the progressively-enhanced policy
     // radiogroup, discoverable guarded actions, nested-modal coordination,
     // and focus-safe, fully bounded proximity and exact-listener navigation
-    // bring the measured pass to 311,257 Brotli bytes after the design audit.
+    // bring the measured pass to 311,344 Brotli bytes after the design audit
+    // and its resize-safe explicit camera commands.
     // Keep only 50 bytes of headroom so this interaction safety work cannot
     // turn into an open-ended budget.
-    budgetThreshold: 311_307,
+    budgetThreshold: 311_394,
     ssr: true,
     ssrEntryPoints: {
       check: "src/check.ts",

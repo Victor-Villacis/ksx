@@ -4710,6 +4710,7 @@ function createDeviceCapturePanel(row: RdDeviceRowView): HTMLDetailsElement {
     const button = document.createElement("button");
     button.type = "submit";
     button.className = "rd-panel-action primary";
+    button.dataset.widgetRevealKey = "capture-primary";
     button.disabled = !identityAuthoritative;
     if (!identityAuthoritative) {
       button.title = "Device identity is temporarily unavailable. Check again before preparing it.";
@@ -4737,6 +4738,7 @@ function createDeviceCapturePanel(row: RdDeviceRowView): HTMLDetailsElement {
     const button = document.createElement("button");
     button.type = "submit";
     button.className = "rd-panel-action";
+    button.dataset.widgetRevealKey = "capture-primary";
     button.disabled = !identityAuthoritative;
     if (!identityAuthoritative) {
       button.title = "Device identity is temporarily unavailable. Check again before releasing it.";

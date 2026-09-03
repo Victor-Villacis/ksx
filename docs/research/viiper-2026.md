@@ -148,6 +148,29 @@ startup is not yet measured (no such line appeared in the debug logs of the
 four short runs above). ksx will pass `--update-notify=none`; S2 measures with
 `--log.level trace` and a network capture.
 
+### 2.7 The ksx client against the real server (M-CLIENT) — MEASURED 2026-09-03
+
+`crates/ksx-viiper` (the std-only client written in S1) driven by its
+`examples/probe.rs` against `viiper server --api.addr 127.0.0.1:3342
+--usb.addr 127.0.0.1:3341 --api.auto-attach-local-client=false
+--update-notify=none --log.level debug`, no driver installed:
+
+| Step | keyboard | xbox360 |
+|---|---|---|
+| `ping` (pinned 0.7.0) | 2.5 ms | 1.6 ms |
+| `bus/create` | 0.7 ms | 0.8 ms |
+| `bus/1/add` | 0.7 ms | 0.6 ms |
+| stream open (handshake + 100 ms refusal wait) | 115 ms | 107 ms |
+| remove device + bus | 1.3 ms | 1.6 ms |
+
+The opt-in conformance test (`cargo test -p ksx-viiper --features
+viiper-live-tests` with `KSX_VIIPER_LIVE_ADDR`) passed: ping, bus and device
+lifecycle, a neutral report on the stream, and the inline 404 for a stream to
+device 99. With `--update-notify=none` the debug log showed no update check.
+The server still logs `ERROR api handshake check error=EOF` for the TCP
+connect-and-close a port probe performs (§2.1) — the supervisor must probe
+with `ping `, not with a bare connect.
+
 ## 3. Facts read in upstream source (SOURCE — tag v0.7.0 and usbip-win2 master / v.0.9.7.7)
 
 - **Server shutdown removes nothing.** `apiSrv.Close()`/`usbSrv.Close()` only
@@ -214,7 +237,7 @@ four short runs above). ksx will pass `--update-notify=none`; S2 measures with
 
 | Row | Verdict today | Slice it gates |
 |---|---|---|
-| M-PROTO, M-STREAM, M-REAPER, M-ORPHAN, M-PORT | MEASURED — as designed in the plan | S1 client, S2 supervisor |
+| M-PROTO, M-STREAM, M-REAPER, M-ORPHAN, M-PORT, M-CLIENT | MEASURED — as designed in the plan; the S1 client passes live conformance | S1 client (done), S2 supervisor |
 | M-KEYDIR | MEASURED — key in `%APPDATA%\VIIPER`, password logged in clear | S2 (log handling), S4 auth |
 | M-CERT, M-PNPUTIL, M-HUB, M-REBOOT | NOT RUN — need the VM | S3 (usbip path A/B) |
 | M-ADMIN | SOURCE says no admin; NOT RUN | S2 / S2b |
